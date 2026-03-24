@@ -1,0 +1,124 @@
+from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Optional
+from enum import Enum
+from datetime import datetime
+
+
+class AgentStatus(str, Enum):
+    SUCCESS = "success"
+    FAILURE = "failure"
+    PENDING = "pending"
+    RETRYING = "retrying"
+    ESCALATED = "escalated"
+
+
+class AgentResponse(BaseModel):
+    status: AgentStatus
+    data: Dict[str, Any] = Field(default_factory=dict)
+    reasoning: str = ""
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    agent_name: str = ""
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    retry_count: int = 0
+    error: Optional[str] = None
+
+
+class Lead(BaseModel):
+    name: str
+    title: str
+    company: str
+    email: Optional[str] = None
+    linkedin: Optional[str] = None
+    score: float = Field(default=0.0, ge=0.0, le=1.0)
+    signals: List[str] = Field(default_factory=list)
+
+
+class EmailSequence(BaseModel):
+    lead: Lead
+    emails: List[Dict[str, str]]
+    sequence_id: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class DealRisk(BaseModel):
+    deal_id: str
+    company: str
+    risk_level: str
+    risk_signals: List[str]
+    days_inactive: int
+    recovery_strategy: str
+    confidence: float
+
+
+class ChurnRisk(BaseModel):
+    account_id: str
+    company: str
+    churn_probability: float
+    risk_factors: List[str]
+    retention_strategy: str
+    urgency: str
+
+
+class OutreachRequest(BaseModel):
+    company: str
+    industry: str
+    size: str
+    website: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class RiskDetectionRequest(BaseModel):
+    deal_ids: Optional[List[str]] = None
+    check_all: bool = True
+    inactivity_threshold_days: int = 10
+
+
+class ChurnPredictionRequest(BaseModel):
+    account_ids: Optional[List[str]] = None
+    top_n: int = 3
+
+
+class OrchestratorState(BaseModel):
+    session_id: str
+    task_type: str
+    input_data: Dict[str, Any]
+    current_agent: str = "orchestrator"
+    agent_outputs: Dict[str, AgentResponse] = Field(default_factory=dict)
+    completed_agents: List[str] = Field(default_factory=list)
+    failed_agents: List[str] = Field(default_factory=list)
+    retry_counts: Dict[str, int] = Field(default_factory=dict)
+    escalated: bool = False
+    final_output: Optional[Dict[str, Any]] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class AuditLog(BaseModel):
+    log_id: str
+    session_id: str
+    agent_name: str
+    action: str
+    input_summary: str
+    output_summary: str
+    status: AgentStatus
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    reasoning: str = ""
+    confidence: float = 0.0
+
+
+class CRMAccount(BaseModel):
+    account_id: str
+    company: str
+    contact_name: str
+    email: str
+    deal_value: float
+    stage: str
+    last_activity: str
+    days_in_stage: int
+    arr: float
+    health_score: float
+    open_tickets: int
+    logins_last_30_days: int
+    nps_score: float
+    industry: str
+    employee_count: int

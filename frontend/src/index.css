@@ -1,0 +1,153 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: #080B14;
+    color: #C8D8F0;
+    font-family: 'DM Sans', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: #0D1220;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #1E2D45;
+    border-radius: 2px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #00E5FF44;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-panel border border-border rounded-xl p-5 transition-all duration-200;
+  }
+
+  .card:hover {
+    border-color: rgba(0, 229, 255, 0.2);
+  }
+
+  .btn-primary {
+    @apply bg-accent text-void font-display font-semibold text-sm px-5 py-2.5 rounded-lg
+    hover:brightness-110 active:scale-95 transition-all duration-150 cursor-pointer;
+  }
+
+  .btn-ghost {
+    @apply bg-transparent border border-border text-text-dim text-sm px-4 py-2 rounded-lg
+    hover:border-accent hover:text-accent transition-all duration-150 cursor-pointer;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-mono font-medium;
+  }
+
+  .badge-critical {
+    @apply badge bg-danger/15 text-danger border border-danger/30;
+  }
+
+  .badge-high {
+    @apply badge bg-warn/15 text-warn border border-warn/30;
+  }
+
+  .badge-medium {
+    @apply badge bg-accent/15 text-accent border border-accent/30;
+  }
+
+  .badge-low {
+    @apply badge bg-success/15 text-success border border-success/30;
+  }
+
+  .badge-success {
+    @apply badge bg-success/15 text-success border border-success/30;
+  }
+
+  .badge-failure {
+    @apply badge bg-danger/15 text-danger border border-danger/30;
+  }
+
+  .stat-card {
+    @apply card flex flex-col gap-2;
+  }
+
+  .glow-line {
+    @apply h-px w-full;
+    background: linear-gradient(90deg, transparent, #00E5FF44, transparent);
+  }
+
+  .scanline {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .scanline::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 229, 255, 0.01) 2px,
+      rgba(0, 229, 255, 0.01) 4px
+    );
+    pointer-events: none;
+  }
+
+  .agent-pulse {
+    animation: agentPulse 2s ease-in-out infinite;
+  }
+
+  @keyframes agentPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  .progress-bar {
+    @apply h-1.5 rounded-full bg-border overflow-hidden;
+  }
+
+  .progress-fill {
+    @apply h-full rounded-full transition-all duration-700;
+  }
+}
+
+@layer utilities {
+  .text-gradient-accent {
+    background: linear-gradient(135deg, #00E5FF, #7C3AED);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .bg-grid {
+    background-image:
+      linear-gradient(rgba(30, 45, 69, 0.4) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(30, 45, 69, 0.4) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+}
