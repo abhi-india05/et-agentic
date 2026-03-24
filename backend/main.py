@@ -1,24 +1,23 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from contextlib import asynccontextmanager
+from typing import Any, Dict, Optional
+
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from contextlib import asynccontextmanager
-from typing import Any, Dict, Optional, List
-import asyncio
 
 from backend.config.settings import settings
-from backend.models.schemas import (
-    OutreachRequest,
-    RiskDetectionRequest,
-    ChurnPredictionRequest,
-)
+from backend.utils.logger import configure_logging, get_logger, get_all_logs, get_logs_by_session
+from backend.utils.helpers import generate_session_id, now_iso
+
+configure_logging(log_level=settings.log_level, environment=settings.environment)
+
+from backend.models.schemas import OutreachRequest, RiskDetectionRequest, ChurnPredictionRequest
 from backend.agents.orchestrator import run_orchestrator
+from backend.agents.failure_recovery import get_recovery_engine
 from backend.tools.email_tool import get_email_stats, get_sent_emails
 from backend.tools.crm_tool import get_pipeline_stats, get_all_accounts
 from backend.memory.vector_store import get_vector_store
-from backend.utils.logger import configure_logging, get_all_logs, get_logs_by_session, get_logger
-from backend.utils.helpers import generate_session_id, now_iso
 
-configure_logging()
 logger = get_logger("main")
 
 _active_sessions: Dict[str, Dict[str, Any]] = {}
@@ -26,20 +25,28 @@ _active_sessions: Dict[str, Dict[str, Any]] = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("RevOps AI starting up", environment=settings.environment)
+    logger.info(
+        "revops_ai_startup",
+        environment=settings.environment,
+        model=settings.openai_model,
+        has_openai_key=settings.has_openai_key,
+        mock_email=settings.is_mock_email,
+    )
     store = get_vector_store()
     store.load()
-    logger.info("Vector store loaded", stats=store.stats())
+    logger.info("vector_store_ready", **store.stats())
     yield
-    logger.info("RevOps AI shutting down")
+    logger.info("revops_ai_shutdown")
     store.save()
 
 
 app = FastAPI(
     title="RevOps AI — Autonomous Sales & Revenue Intelligence",
-    description="Multi-agent AI system for autonomous sales operations",
+    description="Production-grade multi-agent AI system for autonomous sales operations.",
     version="1.0.0",
     lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc",
 )
 
 app.add_middleware(
@@ -51,28 +58,71 @@ app.add_middleware(
 )
 
 
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.error(
+        "unhandled_exception",
+        path=str(request.url),
+        method=request.method,
+        error=str(exc),
+        exc_info=True,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "An internal error occurred. It has been logged.",
+            "detail": str(exc) if settings.environment != "production" else "Contact support.",
+            "timestamp": now_iso(),
+        },
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": exc.detail, "status_code": exc.status_code, "timestamp": now_iso()},
+    )
+
+
+
+def _start_session(session_id: str, task_type: str) -> None:
+    _active_sessions[session_id] = {
+        "status": "running",
+        "task_type": task_type,
+        "started_at": now_iso(),
+    }
+
+
+def _end_session(session_id: str, status: str = "completed") -> None:
+    if session_id in _active_sessions:
+        _active_sessions[session_id]["status"] = status
+        _active_sessions[session_id]["completed_at"] = now_iso()
+
+
+
 @app.get("/health")
 async def health_check():
+    store = get_vector_store()
     return {
         "status": "healthy",
         "version": "1.0.0",
         "environment": settings.environment,
         "timestamp": now_iso(),
-        "vector_store": get_vector_store().stats(),
+        "openai_configured": settings.has_openai_key,
+        "email_mode": "live" if not settings.is_mock_email else "mock",
+        "vector_store": store.stats(),
         "email_stats": get_email_stats(),
+        "active_sessions": len([s for s in _active_sessions.values() if s["status"] == "running"]),
     }
 
 
 @app.post("/run-outreach")
 async def run_outreach(request: OutreachRequest):
     session_id = generate_session_id()
-    logger.info("Cold outreach request received", company=request.company, session_id=session_id)
-
-    _active_sessions[session_id] = {
-        "status": "running",
-        "task_type": "cold_outreach",
-        "started_at": now_iso(),
-    }
+    logger.info("outreach_request", company=request.company, session_id=session_id)
+    _start_session(session_id, "cold_outreach")
 
     try:
         result = await run_orchestrator(
@@ -86,35 +136,25 @@ async def run_outreach(request: OutreachRequest):
             },
             session_id=session_id,
         )
-        _active_sessions[session_id]["status"] = "completed"
-        _active_sessions[session_id]["completed_at"] = now_iso()
-
-        return JSONResponse(
-            status_code=200,
-            content={
-                "session_id": session_id,
-                "task_type": "cold_outreach",
-                "status": result.get("status", "completed"),
-                "data": result,
-                "timestamp": now_iso(),
-            },
-        )
+        _end_session(session_id, "completed")
+        return JSONResponse(status_code=200, content={
+            "session_id": session_id,
+            "task_type": "cold_outreach",
+            "status": result.get("status", "completed"),
+            "data": result,
+            "timestamp": now_iso(),
+        })
     except Exception as e:
-        _active_sessions[session_id]["status"] = "failed"
-        logger.error("Outreach run failed", error=str(e), session_id=session_id)
+        _end_session(session_id, "failed")
+        logger.error("outreach_endpoint_error", error=str(e), session_id=session_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/detect-risk")
 async def detect_risk(request: RiskDetectionRequest):
     session_id = generate_session_id()
-    logger.info("Risk detection request received", session_id=session_id)
-
-    _active_sessions[session_id] = {
-        "status": "running",
-        "task_type": "risk_detection",
-        "started_at": now_iso(),
-    }
+    logger.info("risk_detection_request", session_id=session_id)
+    _start_session(session_id, "risk_detection")
 
     try:
         result = await run_orchestrator(
@@ -126,35 +166,24 @@ async def detect_risk(request: RiskDetectionRequest):
             },
             session_id=session_id,
         )
-        _active_sessions[session_id]["status"] = "completed"
-        _active_sessions[session_id]["completed_at"] = now_iso()
-
-        return JSONResponse(
-            status_code=200,
-            content={
-                "session_id": session_id,
-                "task_type": "risk_detection",
-                "status": result.get("status", "completed"),
-                "data": result,
-                "timestamp": now_iso(),
-            },
-        )
+        _end_session(session_id, "completed")
+        return JSONResponse(status_code=200, content={
+            "session_id": session_id,
+            "task_type": "risk_detection",
+            "status": result.get("status", "completed"),
+            "data": result,
+            "timestamp": now_iso(),
+        })
     except Exception as e:
-        _active_sessions[session_id]["status"] = "failed"
-        logger.error("Risk detection failed", error=str(e), session_id=session_id)
+        _end_session(session_id, "failed")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/predict-churn")
 async def predict_churn(request: ChurnPredictionRequest):
     session_id = generate_session_id()
-    logger.info("Churn prediction request received", session_id=session_id)
-
-    _active_sessions[session_id] = {
-        "status": "running",
-        "task_type": "churn_prediction",
-        "started_at": now_iso(),
-    }
+    logger.info("churn_prediction_request", session_id=session_id)
+    _start_session(session_id, "churn_prediction")
 
     try:
         result = await run_orchestrator(
@@ -165,54 +194,38 @@ async def predict_churn(request: ChurnPredictionRequest):
             },
             session_id=session_id,
         )
-        _active_sessions[session_id]["status"] = "completed"
-        _active_sessions[session_id]["completed_at"] = now_iso()
-
-        return JSONResponse(
-            status_code=200,
-            content={
-                "session_id": session_id,
-                "task_type": "churn_prediction",
-                "status": result.get("status", "completed"),
-                "data": result,
-                "timestamp": now_iso(),
-            },
-        )
+        _end_session(session_id, "completed")
+        return JSONResponse(status_code=200, content={
+            "session_id": session_id,
+            "task_type": "churn_prediction",
+            "status": result.get("status", "completed"),
+            "data": result,
+            "timestamp": now_iso(),
+        })
     except Exception as e:
-        _active_sessions[session_id]["status"] = "failed"
-        logger.error("Churn prediction failed", error=str(e), session_id=session_id)
+        _end_session(session_id, "failed")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/logs")
 async def get_logs(session_id: Optional[str] = None, limit: int = 100):
-    if session_id:
-        logs = get_logs_by_session(session_id)
-    else:
-        logs = get_all_logs()
-    return {
-        "logs": logs[:limit],
-        "total": len(logs),
-        "timestamp": now_iso(),
-    }
+    logs = get_logs_by_session(session_id) if session_id else get_all_logs()
+    return {"logs": logs[:limit], "total": len(logs), "timestamp": now_iso()}
 
 
 @app.get("/pipeline")
 async def get_pipeline():
-    stats = get_pipeline_stats()
-    accounts = get_all_accounts()
     return {
-        "stats": stats,
-        "accounts": accounts[:20],
+        "stats": get_pipeline_stats(),
+        "accounts": get_all_accounts()[:20],
         "timestamp": now_iso(),
     }
 
 
 @app.get("/emails")
 async def get_emails(limit: int = 50):
-    emails = get_sent_emails()
     return {
-        "emails": emails[:limit],
+        "emails": get_sent_emails()[:limit],
         "stats": get_email_stats(),
         "timestamp": now_iso(),
     }
@@ -223,14 +236,27 @@ async def get_sessions():
     return {
         "sessions": _active_sessions,
         "total": len(_active_sessions),
+        "running": len([s for s in _active_sessions.values() if s["status"] == "running"]),
         "timestamp": now_iso(),
     }
 
 
 @app.get("/memory/stats")
 async def get_memory_stats():
-    store = get_vector_store()
-    return store.stats()
+    return get_vector_store().stats()
+
+
+@app.get("/recovery-report")
+async def recovery_report():
+    return get_recovery_engine().get_recovery_report()
+
+
+@app.delete("/memory/clear")
+async def clear_memory():
+    if settings.environment == "production":
+        raise HTTPException(status_code=403, detail="Not available in production.")
+    get_vector_store().clear()
+    return {"status": "cleared", "timestamp": now_iso()}
 
 
 if __name__ == "__main__":

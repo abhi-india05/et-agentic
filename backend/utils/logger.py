@@ -1,25 +1,41 @@
-import structlog
 import logging
 import sys
+import uuid
 from datetime import datetime
-from typing import Any, Dict
-import json
+from typing import Any, Dict, List, Optional
 
-from backend.config.settings import settings
+import structlog
+
+_logging_configured = False
+
+audit_store: List[Dict[str, Any]] = []
 
 
-def configure_logging():
-    log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
+def configure_logging(log_level: str = "INFO", environment: str = "development") -> None:
+    
+    global _logging_configured
+    if _logging_configured:
+        return
+
+    level = getattr(logging, log_level.upper(), logging.INFO)
+
+    shared_processors = [
+        structlog.contextvars.merge_contextvars,
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.stdlib.add_logger_name,
+    ]
+
+    if environment == "production":
+        renderer = structlog.processors.JSONRenderer()
+    else:
+        renderer = structlog.dev.ConsoleRenderer(colors=True)
 
     structlog.configure(
-        processors=[
-            structlog.contextvars.merge_contextvars,
-            structlog.processors.add_log_level,
-            structlog.processors.TimeStamper(fmt="iso"),
+        processors=shared_processors + [
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
-            structlog.processors.JSONRenderer() if settings.environment == "production"
-            else structlog.dev.ConsoleRenderer(colors=True),
+            renderer,
         ],
         context_class=dict,
         logger_factory=structlog.PrintLoggerFactory(),
@@ -30,15 +46,15 @@ def configure_logging():
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stdout,
-        level=log_level,
+        level=level,
     )
+
+    _logging_configured = True
 
 
 def get_logger(name: str):
+  
     return structlog.get_logger(name)
-
-
-audit_store: list[Dict[str, Any]] = []
 
 
 def record_audit(
@@ -50,9 +66,12 @@ def record_audit(
     status: str,
     reasoning: str = "",
     confidence: float = 0.0,
+    request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+   
     log_entry = {
-        "log_id": f"log_{datetime.utcnow().timestamp()}_{agent_name}",
+        "log_id": f"log_{uuid.uuid4().hex[:10]}",
+        "request_id": request_id or str(uuid.uuid4())[:8],
         "session_id": session_id,
         "agent_name": agent_name,
         "action": action,
@@ -61,23 +80,25 @@ def record_audit(
         "status": status,
         "timestamp": datetime.utcnow().isoformat(),
         "reasoning": reasoning,
-        "confidence": confidence,
+        "confidence": round(float(confidence), 4),
     }
     audit_store.append(log_entry)
+
     logger = get_logger("audit")
     logger.info(
-        "audit_log",
+        "audit_event",
         session_id=session_id,
-        agent_name=agent_name,
+        agent=agent_name,
         action=action,
         status=status,
+        confidence=round(float(confidence), 4),
     )
     return log_entry
 
 
-def get_all_logs() -> list[Dict[str, Any]]:
+def get_all_logs() -> List[Dict[str, Any]]:
     return list(reversed(audit_store))
 
 
-def get_logs_by_session(session_id: str) -> list[Dict[str, Any]]:
-    return [log for log in audit_store if log["session_id"] == session_id]
+def get_logs_by_session(session_id: str) -> List[Dict[str, Any]]:
+    return [log for log in reversed(audit_store) if log["session_id"] == session_id]

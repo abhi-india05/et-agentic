@@ -1,12 +1,12 @@
 import os
-import json
 import pickle
-import numpy as np
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 
-from backend.utils.logger import get_logger
+import numpy as np
+
 from backend.config.settings import settings
+from backend.utils.logger import get_logger
 
 logger = get_logger("vector_store")
 
@@ -15,10 +15,9 @@ try:
     FAISS_AVAILABLE = True
 except ImportError:
     FAISS_AVAILABLE = False
-    logger.warning("FAISS not available, using in-memory fallback")
 
 try:
-    from openai import OpenAI
+    from openai import OpenAI as _OpenAI
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
@@ -33,29 +32,34 @@ class VectorMemoryStore:
         self._openai_client = None
         self._initialize()
 
-    def _initialize(self):
-        if FAISS_AVAILABLE:
-            self.index = faiss.IndexFlatL2(self.dimension)
-            logger.info("FAISS index initialized", dimension=self.dimension)
+    def _initialize(self) -> None:
+        if not FAISS_AVAILABLE:
+            logger.warning("faiss_unavailable", reason="faiss-cpu not installed, using in-memory fallback")
         else:
-            self.index = None
-            logger.warning("Using fallback in-memory store")
+            self.index = faiss.IndexFlatL2(self.dimension)
+            logger.info("faiss_index_initialized", dimension=self.dimension)
 
-        if OPENAI_AVAILABLE and settings.openai_api_key:
-            self._openai_client = OpenAI(api_key=settings.openai_api_key)
+        if OPENAI_AVAILABLE and settings.has_openai_key:
+            try:
+                self._openai_client = _OpenAI(api_key=settings.openai_api_key)
+                logger.info("embedding_client_ready")
+            except Exception as e:
+                logger.warning("embedding_client_failed", error=str(e))
+                self._openai_client = None
 
     def _get_embedding(self, text: str) -> np.ndarray:
         if self._openai_client:
             try:
                 response = self._openai_client.embeddings.create(
                     model="text-embedding-3-small",
-                    input=text
+                    input=text[:8000],   
                 )
                 return np.array(response.data[0].embedding, dtype=np.float32)
             except Exception as e:
-                logger.warning("OpenAI embedding failed, using random", error=str(e))
+                logger.warning("embedding_fallback", error=str(e))
 
-        return np.random.randn(self.dimension).astype(np.float32)
+        rng = np.random.default_rng(abs(hash(text)) % (2**32))
+        return rng.standard_normal(self.dimension).astype(np.float32)
 
     def add_document(
         self,
@@ -77,10 +81,9 @@ class VectorMemoryStore:
             if self.index is not None and FAISS_AVAILABLE:
                 self.index.add(embedding.reshape(1, -1))
 
-            logger.info("Document added to memory", doc_id=doc_id)
             return True
         except Exception as e:
-            logger.error("Failed to add document", doc_id=doc_id, error=str(e))
+            logger.error("add_document_failed", doc_id=doc_id, error=str(e))
             return False
 
     def search(
@@ -95,35 +98,30 @@ class VectorMemoryStore:
         try:
             query_embedding = self._get_embedding(query)
 
-            if self.index is not None and FAISS_AVAILABLE and len(self.documents) > 0:
+            if self.index is not None and FAISS_AVAILABLE and self.index.ntotal > 0:
                 k = min(top_k, len(self.documents))
-                distances, indices = self.index.search(
-                    query_embedding.reshape(1, -1), k
-                )
+                distances, indices = self.index.search(query_embedding.reshape(1, -1), k)
                 results = []
                 for dist, idx in zip(distances[0], indices[0]):
-                    if idx < len(self.documents):
-                        doc = self.documents[idx].copy()
-                        doc["similarity_score"] = float(1 / (1 + dist))
+                    if 0 <= idx < len(self.documents):
+                        doc = dict(self.documents[idx])
+                        doc["similarity_score"] = float(1.0 / (1.0 + dist))
                         results.append(doc)
             else:
-                results = self.documents[-top_k:].copy()
+                results = [dict(d) for d in self.documents[-top_k:]]
                 for r in results:
                     r["similarity_score"] = 0.5
 
             if filter_metadata:
                 results = [
                     r for r in results
-                    if all(
-                        r["metadata"].get(k) == v
-                        for k, v in filter_metadata.items()
-                    )
+                    if all(r["metadata"].get(k) == v for k, v in filter_metadata.items())
                 ]
 
             return results
 
         except Exception as e:
-            logger.error("Search failed", error=str(e))
+            logger.error("search_failed", error=str(e))
             return []
 
     def get_context_for_company(self, company: str) -> str:
@@ -131,52 +129,63 @@ class VectorMemoryStore:
         if not results:
             results = self.search(company, top_k=3)
 
-        context_parts = []
-        for r in results:
-            context_parts.append(f"[{r['timestamp'][:10]}] {r['content']}")
+        if not results:
+            return "No prior context available."
 
-        return "\n".join(context_parts) if context_parts else "No prior context available."
+        return "\n".join(
+            f"[{r['timestamp'][:10]}] {r['content']}" for r in results
+        )
 
-    def save(self):
+    def save(self) -> None:
         try:
-            os.makedirs(os.path.dirname(self.index_path), exist_ok=True)
+            index_dir = os.path.dirname(self.index_path)
+            if index_dir:
+                os.makedirs(index_dir, exist_ok=True)
+
             with open(f"{self.index_path}_docs.pkl", "wb") as f:
                 pickle.dump(self.documents, f)
 
             if self.index is not None and FAISS_AVAILABLE:
                 faiss.write_index(self.index, f"{self.index_path}.faiss")
 
-            logger.info("Vector store saved")
+            logger.info("vector_store_saved", doc_count=len(self.documents))
         except Exception as e:
-            logger.error("Failed to save vector store", error=str(e))
+            logger.error("vector_store_save_failed", error=str(e))
 
-    def load(self):
+    def load(self) -> None:
         try:
             docs_path = f"{self.index_path}_docs.pkl"
             if os.path.exists(docs_path):
                 with open(docs_path, "rb") as f:
                     self.documents = pickle.load(f)
+                logger.info("vector_store_loaded", doc_count=len(self.documents))
+            else:
+                logger.info("vector_store_fresh", reason="no persisted index found")
 
             faiss_path = f"{self.index_path}.faiss"
             if FAISS_AVAILABLE and os.path.exists(faiss_path):
                 self.index = faiss.read_index(faiss_path)
+                logger.info("faiss_index_loaded")
 
-            logger.info("Vector store loaded", documents=len(self.documents))
         except Exception as e:
-            logger.error("Failed to load vector store", error=str(e))
+            logger.error("vector_store_load_failed", error=str(e))
+            self.documents = []
+            if FAISS_AVAILABLE:
+                self.index = faiss.IndexFlatL2(self.dimension)
 
-    def clear(self):
+    def clear(self) -> None:
         self.documents = []
         if FAISS_AVAILABLE:
             self.index = faiss.IndexFlatL2(self.dimension)
-        logger.info("Vector store cleared")
+        logger.info("vector_store_cleared")
 
     def stats(self) -> Dict[str, Any]:
         return {
             "total_documents": len(self.documents),
             "faiss_available": FAISS_AVAILABLE,
             "dimension": self.dimension,
-            "index_trained": self.index is not None,
+            "index_active": self.index is not None,
+            "embedding_client": self._openai_client is not None,
         }
 
 
