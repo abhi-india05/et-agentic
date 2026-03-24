@@ -78,6 +78,14 @@ class ChurnPredictionRequest(BaseModel):
     top_n: int = 3
 
 
+class SendEmailRequest(BaseModel):
+    to_email: str
+    to_name: Optional[str] = ""
+    subject: str
+    body_text: str
+    body_html: Optional[str] = None
+
+
 class OrchestratorState(BaseModel):
     session_id: str
     task_type: str

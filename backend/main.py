@@ -11,10 +11,12 @@ from backend.utils.helpers import generate_session_id, now_iso
 
 configure_logging(log_level=settings.log_level, environment=settings.environment)
 
-from backend.models.schemas import OutreachRequest, RiskDetectionRequest, ChurnPredictionRequest
+import asyncio
+
+from backend.models.schemas import OutreachRequest, RiskDetectionRequest, ChurnPredictionRequest, SendEmailRequest
 from backend.agents.orchestrator import run_orchestrator
 from backend.agents.failure_recovery import get_recovery_engine
-from backend.tools.email_tool import get_email_stats, get_sent_emails
+from backend.tools.email_tool import get_email_stats, get_sent_emails, get_email_client
 from backend.tools.crm_tool import get_pipeline_stats, get_all_accounts
 from backend.memory.vector_store import get_vector_store
 
@@ -51,7 +53,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -229,6 +231,22 @@ async def get_emails(limit: int = 50):
         "stats": get_email_stats(),
         "timestamp": now_iso(),
     }
+
+@app.post("/send-email")
+async def send_email(req: SendEmailRequest):
+    # Send via SMTP if configured, otherwise this will be recorded as mock.
+    client = get_email_client()
+    result = await asyncio.to_thread(
+        client.send_email,
+        to_email=req.to_email,
+        to_name=req.to_name or "",
+        subject=req.subject,
+        body_text=req.body_text,
+        body_html=req.body_html,
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "email failed"))
+    return {"result": result, "timestamp": now_iso()}
 
 
 @app.get("/sessions")

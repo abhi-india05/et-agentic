@@ -1,6 +1,5 @@
-import json
+import asyncio
 from typing import Any, Dict, List, Optional
-from datetime import datetime
 
 from backend.utils.logger import get_logger
 from backend.utils.helpers import now_iso, generate_id
@@ -13,21 +12,62 @@ sent_emails: List[Dict[str, Any]] = []
 
 class EmailClient:
     def __init__(self):
-        self.api_key = settings.sendgrid_api_key
-        self.is_mock = self.api_key == "mock_key" or not self.api_key.startswith("SG.")
-        self._sg_client = None
+        # Prefer SMTP (SMTP2GO) via fastapi-mail. If creds aren't configured,
+        # run in mock mode and just record emails in memory.
+        self.is_mock = settings.is_mock_email
+        self._fm = None
+        self._conf = None
 
-        if not self.is_mock:
-            try:
-                from sendgrid import SendGridAPIClient
-                from sendgrid.helpers.mail import Mail
-                self._sg_client = SendGridAPIClient(self.api_key)
-                logger.info("SendGrid client initialized (live mode)")
-            except ImportError:
-                logger.warning("SendGrid not installed, falling back to mock")
-                self.is_mock = True
-        else:
+        if self.is_mock:
             logger.info("Email client initialized (mock mode)")
+            return
+
+        try:
+            from fastapi_mail import ConnectionConfig, FastMail
+        except ImportError:
+            logger.warning("fastapi-mail not installed, falling back to mock")
+            self.is_mock = True
+            return
+
+        self._conf = ConnectionConfig(
+            MAIL_USERNAME=settings.mail_username,
+            MAIL_PASSWORD=settings.mail_password,
+            MAIL_FROM=settings.mail_from,
+            MAIL_SERVER=settings.mail_server,
+            MAIL_PORT=settings.mail_port,
+            MAIL_STARTTLS=settings.mail_tls,
+            MAIL_SSL_TLS=settings.mail_ssl,
+            USE_CREDENTIALS=True,
+            VALIDATE_CERTS=True,
+        )
+        self._fm = FastMail(self._conf)
+        logger.info(
+            "SMTP email client initialized (live mode)",
+            server=settings.mail_server,
+            port=settings.mail_port,
+            tls=settings.mail_tls,
+            ssl=settings.mail_ssl,
+        )
+
+    async def _send_async(
+        self,
+        *,
+        to_email: str,
+        subject: str,
+        body_text: str,
+        body_html: Optional[str],
+    ) -> None:
+        from fastapi_mail import MessageSchema
+
+        # fastapi-mail's schema supports either str or list[str] for recipients,
+        # but we use list to be explicit.
+        message = MessageSchema(
+            subject=subject,
+            recipients=[to_email],
+            body=body_html or body_text,
+            subtype="html" if body_html else "plain",
+        )
+        await self._fm.send_message(message)
 
     def send_email(
         self,
@@ -56,6 +96,10 @@ class EmailClient:
             "status": "pending",
         }
 
+        # Prefer configured MAIL_FROM as the actual sender.
+        if settings.mail_from:
+            email_record["from_email"] = settings.mail_from
+
         if self.is_mock:
             email_record["status"] = "sent_mock"
             email_record["mock_message_id"] = generate_id("msg")
@@ -74,24 +118,26 @@ class EmailClient:
             }
 
         try:
-            from sendgrid.helpers.mail import Mail
-            message = Mail(
-                from_email=(from_email, from_name),
-                to_emails=(to_email, to_name),
-                subject=subject,
-                plain_text_content=body_text,
-                html_content=body_html or f"<p>{body_text}</p>",
+            if not self._fm:
+                raise RuntimeError("Email client not initialized")
+
+            # We're running in a ThreadPoolExecutor thread (LangGraph invoke),
+            # so it's safe to create a fresh event loop per send.
+            asyncio.run(
+                self._send_async(
+                    to_email=to_email,
+                    subject=subject,
+                    body_text=body_text,
+                    body_html=body_html,
+                )
             )
-            response = self._sg_client.send(message)
             email_record["status"] = "sent"
-            email_record["sendgrid_status_code"] = response.status_code
             sent_emails.append(email_record)
-            logger.info("Email sent via SendGrid", to=to_email, status=response.status_code)
+            logger.info("Email sent via SMTP", to=to_email)
             return {
                 "success": True,
                 "email_id": email_record["email_id"],
                 "status": "sent",
-                "sendgrid_status": response.status_code,
             }
         except Exception as e:
             email_record["status"] = "failed"
