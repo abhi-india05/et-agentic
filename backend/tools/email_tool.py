@@ -1,9 +1,15 @@
-import asyncio
+from __future__ import annotations
+
+import html
+import smtplib
+import ssl
+from email.message import EmailMessage
+from email.utils import formataddr, make_msgid
 from typing import Any, Dict, List, Optional
 
-from backend.utils.logger import get_logger
-from backend.utils.helpers import now_iso, generate_id
 from backend.config.settings import settings
+from backend.utils.helpers import generate_id, now_iso
+from backend.utils.logger import get_logger
 
 logger = get_logger("email_tool")
 
@@ -12,35 +18,13 @@ sent_emails: List[Dict[str, Any]] = []
 
 class EmailClient:
     def __init__(self):
-        # Prefer SMTP (SMTP2GO) via fastapi-mail. If creds aren't configured,
+        # Prefer SMTP (Gmail) via stdlib smtplib. If creds aren't configured,
         # run in mock mode and just record emails in memory.
         self.is_mock = settings.is_mock_email
-        self._fm = None
-        self._conf = None
-
         if self.is_mock:
             logger.info("Email client initialized (mock mode)")
             return
 
-        try:
-            from fastapi_mail import ConnectionConfig, FastMail
-        except ImportError:
-            logger.warning("fastapi-mail not installed, falling back to mock")
-            self.is_mock = True
-            return
-
-        self._conf = ConnectionConfig(
-            MAIL_USERNAME=settings.mail_username,
-            MAIL_PASSWORD=settings.mail_password,
-            MAIL_FROM=settings.mail_from,
-            MAIL_SERVER=settings.mail_server,
-            MAIL_PORT=settings.mail_port,
-            MAIL_STARTTLS=settings.mail_tls,
-            MAIL_SSL_TLS=settings.mail_ssl,
-            USE_CREDENTIALS=True,
-            VALIDATE_CERTS=True,
-        )
-        self._fm = FastMail(self._conf)
         logger.info(
             "SMTP email client initialized (live mode)",
             server=settings.mail_server,
@@ -49,25 +33,36 @@ class EmailClient:
             ssl=settings.mail_ssl,
         )
 
-    async def _send_async(
-        self,
-        *,
-        to_email: str,
-        subject: str,
-        body_text: str,
-        body_html: Optional[str],
-    ) -> None:
-        from fastapi_mail import MessageSchema
+    def _build_html_fallback(self, body_text: str) -> str:
+        escaped = html.escape(body_text or "")
+        escaped = escaped.replace("\r\n", "\n").replace("\r", "\n")
+        return "<p>" + escaped.replace("\n", "<br>") + "</p>"
 
-        # fastapi-mail's schema supports either str or list[str] for recipients,
-        # but we use list to be explicit.
-        message = MessageSchema(
-            subject=subject,
-            recipients=[to_email],
-            body=body_html or body_text,
-            subtype="html" if body_html else "plain",
-        )
-        await self._fm.send_message(message)
+    def _send_via_smtp(self, message: EmailMessage) -> None:
+        if not settings.mail_username or not settings.mail_password:
+            raise RuntimeError("MAIL_USERNAME and MAIL_PASSWORD must be set for live email")
+
+        context = ssl.create_default_context()
+
+        if settings.mail_ssl:
+            with smtplib.SMTP_SSL(
+                settings.mail_server,
+                settings.mail_port,
+                context=context,
+                timeout=30,
+            ) as smtp:
+                smtp.ehlo()
+                smtp.login(settings.mail_username, settings.mail_password)
+                smtp.send_message(message)
+                return
+
+        with smtplib.SMTP(settings.mail_server, settings.mail_port, timeout=30) as smtp:
+            smtp.ehlo()
+            if settings.mail_tls:
+                smtp.starttls(context=context)
+                smtp.ehlo()
+            smtp.login(settings.mail_username, settings.mail_password)
+            smtp.send_message(message)
 
     def send_email(
         self,
@@ -89,7 +84,7 @@ class EmailClient:
             "from_name": from_name,
             "subject": subject,
             "body_text": body_text,
-            "body_html": body_html or f"<p>{body_text}</p>",
+            "body_html": body_html or self._build_html_fallback(body_text),
             "sequence_id": sequence_id,
             "sequence_step": sequence_step,
             "sent_at": now_iso(),
@@ -104,12 +99,7 @@ class EmailClient:
             email_record["status"] = "sent_mock"
             email_record["mock_message_id"] = generate_id("msg")
             sent_emails.append(email_record)
-            logger.info(
-                "Mock email sent",
-                to=to_email,
-                subject=subject,
-                sequence_step=sequence_step,
-            )
+            logger.info("Mock email sent", to=to_email, subject=subject, sequence_step=sequence_step)
             return {
                 "success": True,
                 "email_id": email_record["email_id"],
@@ -118,27 +108,21 @@ class EmailClient:
             }
 
         try:
-            if not self._fm:
-                raise RuntimeError("Email client not initialized")
+            msg = EmailMessage()
+            msg["Subject"] = subject
+            msg["From"] = formataddr((from_name, email_record["from_email"]))
+            msg["To"] = formataddr((to_name, to_email)) if to_name else to_email
+            msg["Message-ID"] = make_msgid(domain=(settings.mail_server or "localhost"))
 
-            # We're running in a ThreadPoolExecutor thread (LangGraph invoke),
-            # so it's safe to create a fresh event loop per send.
-            asyncio.run(
-                self._send_async(
-                    to_email=to_email,
-                    subject=subject,
-                    body_text=body_text,
-                    body_html=body_html,
-                )
-            )
+            msg.set_content(body_text or "")
+            msg.add_alternative(email_record["body_html"], subtype="html")
+
+            self._send_via_smtp(msg)
+
             email_record["status"] = "sent"
             sent_emails.append(email_record)
             logger.info("Email sent via SMTP", to=to_email)
-            return {
-                "success": True,
-                "email_id": email_record["email_id"],
-                "status": "sent",
-            }
+            return {"success": True, "email_id": email_record["email_id"], "status": "sent"}
         except Exception as e:
             email_record["status"] = "failed"
             email_record["error"] = str(e)

@@ -56,7 +56,7 @@ cp .env.example .env
 
 ```bash
 cd backend
-pip install -r ../requirements.txt
+pip install -r requirements.txt
 python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
@@ -76,12 +76,14 @@ npm run dev
 ```env
 OPENAI_API_KEY=sk-...          # Required — OpenAI API key (GPT-4o)
 MONGODB_URI=mongodb://...      # Optional — defaults to local MongoDB
-SENDGRID_API_KEY=SG....        # Optional — uses mock mode if not set
+MAIL_USERNAME=you@gmail.com    # Optional — enables live email if set
+MAIL_PASSWORD=app-password     # Optional — Gmail App Password recommended
+MAIL_FROM=you@gmail.com        # Optional — sender address (usually same as username)
 OPENAI_MODEL=gpt-4o            # Model to use
 ENVIRONMENT=development        # development | production
 ```
 
-> **Note:** `SENDGRID_API_KEY` is optional. Without a valid SG. key, emails are logged in mock mode — all functionality works.
+> **Note:** If `MAIL_USERNAME`, `MAIL_PASSWORD`, and `MAIL_FROM` are not set, emails run in mock mode (logged/stored in memory) — all functionality works.
 
 ---
 
@@ -149,7 +151,7 @@ All agents return:
 | Backend | FastAPI + Python |
 | Database | MongoDB (CRM simulation) |
 | Vector Memory | FAISS |
-| Email | SendGrid (mock fallback) |
+| Email | Gmail SMTP via `smtplib` (mock fallback) |
 | Frontend | React + Vite + Tailwind |
 | Charts | Recharts |
 | Retries | Tenacity |
@@ -177,7 +179,7 @@ revops-ai/
 │   │   └── failure_recovery.py
 │   ├── tools/
 │   │   ├── crm_tool.py            # CRM operations
-│   │   ├── email_tool.py          # SendGrid integration
+│   │   ├── email_tool.py          # Gmail SMTP (mock fallback)
 │   │   └── scraping_tool.py       # Company enrichment
 │   ├── memory/vector_store.py     # FAISS memory
 │   ├── models/schemas.py          # Pydantic models
@@ -204,4 +206,4 @@ revops-ai/
 - **20-Account Dataset** — Pre-seeded CRM with realistic signals for churn/risk demos
 - **Explainability Layer** — Every decision logged with reasoning and confidence
 - **Failure Recovery** — Automatic retry (2x), fallback strategies, escalation flags
-- **Mock Mode** — Runs without MongoDB/SendGrid for immediate testing
+- **Mock Mode** — Runs without MongoDB/email credentials for immediate testing

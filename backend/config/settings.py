@@ -6,13 +6,21 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     openai_api_key: str = Field("", env="OPENAI_API_KEY")
+    gemini_api_key: Optional[str] = Field(None, env="GEMINI_API_KEY")
+    llm_provider: str = Field("openai", env="LLM_PROVIDER")
+    openai_base_url: Optional[str] = Field(None, env="OPENAI_BASE_URL")
+    gemini_base_url: str = Field(
+        "https://generativelanguage.googleapis.com/v1beta/openai/",
+        env="GEMINI_BASE_URL",
+    )
     mongodb_uri: AnyUrl = Field(..., env="MONGODB_URI")
 
-    # Email (SMTP2GO via SMTP). If these aren't set, the app runs in mock-email mode.
+    # Email (Gmail SMTP). If these aren't set, the app runs in mock-email mode.
+    # For Gmail, set MAIL_PASSWORD to an App Password (recommended) rather than your normal login.
     mail_username: Optional[str] = Field(None, env="MAIL_USERNAME")
     mail_password: Optional[str] = Field(None, env="MAIL_PASSWORD")
     mail_from: Optional[str] = Field(None, env="MAIL_FROM")
-    mail_server: str = Field("mail.smtp2go.com", env="MAIL_SERVER")
+    mail_server: str = Field("smtp.gmail.com", env="MAIL_SERVER")
     mail_port: int = Field(587, env="MAIL_PORT")
     mail_tls: bool = Field(True, env="MAIL_TLS")
     mail_ssl: bool = Field(False, env="MAIL_SSL")
@@ -22,6 +30,7 @@ class Settings(BaseSettings):
     sendgrid_api_key: str = Field("mock_key", env="SENDGRID_API_KEY")
 
     openai_model: str = Field("gpt-4o", env="OPENAI_MODEL")
+    openai_embedding_model: str = Field("text-embedding-3-small", env="OPENAI_EMBEDDING_MODEL")
     environment: str = Field("development", env="ENVIRONMENT")
     log_level: str = Field("INFO", env="LOG_LEVEL")
     cors_origins: str = Field(
@@ -56,7 +65,23 @@ class Settings(BaseSettings):
 
     @property
     def has_openai_key(self) -> bool:
-        return bool(self.openai_api_key and self.openai_api_key.strip())
+        return bool(self.llm_api_key)
+
+    @property
+    def llm_api_key(self) -> str:
+        provider = (self.llm_provider or "openai").strip().lower()
+        if provider == "gemini":
+            return (self.gemini_api_key or self.openai_api_key or "").strip()
+        return (self.openai_api_key or "").strip()
+
+    @property
+    def llm_base_url(self) -> Optional[str]:
+        if self.openai_base_url:
+            return self.openai_base_url.strip()
+        provider = (self.llm_provider or "openai").strip().lower()
+        if provider == "gemini":
+            return self.gemini_base_url.strip()
+        return None
 
     @property
     def is_mock_email(self) -> bool:

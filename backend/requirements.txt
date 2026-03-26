@@ -1,6 +1,5 @@
 fastapi
 uvicorn[standard]
-fastapi-mail
 pydantic
 pydantic-settings
 python-dotenv
