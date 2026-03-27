@@ -41,11 +41,21 @@ def _generate_sequence_for_lead(
     lead: Dict[str, Any],
     twin: Dict[str, Any],
     company: str,
+    product_name: str,
+    product_description: str,
     sequence_id: str,
     session_id: str,
 ) -> Dict[str, Any]:
 
     objections = [o.get("objection", "") for o in twin.get("top_objections", [])[:2]]
+
+    product_line = (
+        f"{product_name.strip()} - {product_description.strip()}"
+        if (product_name or "").strip() and (product_description or "").strip()
+        else (product_name or "").strip() or (product_description or "").strip()
+    )
+    if not product_line:
+        product_line = "RevOps AI - autonomous revenue intelligence that detects deal risks, predicts churn, and executes sales actions."
 
     prompt = f"""You are a world-class B2B sales copywriter creating a cold outreach email sequence.
 
@@ -61,7 +71,7 @@ Buyer Psychology:
 - Recommended Tone: {twin.get('recommended_tone', 'consultative')}
 - Opening Hook: {twin.get('opening_hook', 'How are you tackling revenue efficiency this quarter?')}
 
-Product: RevOps AI — autonomous revenue intelligence that detects deal risks, predicts churn, and executes sales actions.
+Product: {product_line}
 
 Create a 3-email cold outreach sequence. Each email must have a distinct angle and timing.
 
@@ -160,6 +170,8 @@ def run_outreach_agent(
     leads: List[Dict[str, Any]],
     twin_profiles: List[Dict[str, Any]],
     company: str,
+    product_name: str,
+    product_description: str,
     session_id: str,
 ) -> Dict[str, Any]:
     logger.info("outreach_agent_start", company=company, leads=len(leads), session_id=session_id)
@@ -170,7 +182,15 @@ def run_outreach_agent(
         for i, lead in enumerate(leads[:2]):
             twin = twin_profiles[i] if i < len(twin_profiles) else {}
             seq_id = generate_id("seq")  
-            sequence = _generate_sequence_for_lead(lead, twin, company, seq_id, session_id)
+            sequence = _generate_sequence_for_lead(
+                lead,
+                twin,
+                company,
+                product_name,
+                product_description,
+                seq_id,
+                session_id,
+            )
             sequences.append(sequence)
 
         n = max(len(sequences), 1)

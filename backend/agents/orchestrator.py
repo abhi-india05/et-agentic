@@ -137,6 +137,8 @@ def outreach_node(state: OrchestratorState) -> OrchestratorState:
     leads = prospect_out.get("data", {}).get("leads", [])
     twins = twin_out.get("data", {}).get("twin_profiles", [])
     company = state["input_data"].get("company", "")
+    product_name = state["input_data"].get("product_name", "")
+    product_description = state["input_data"].get("product_description", "")
 
     result = get_recovery_engine().execute_with_recovery(
         task_name="outreach_agent",
@@ -145,6 +147,8 @@ def outreach_node(state: OrchestratorState) -> OrchestratorState:
             "leads": leads,
             "twin_profiles": twins,
             "company": company,
+            "product_name": product_name,
+            "product_description": product_description,
             "session_id": state["session_id"],
         },
         session_id=state["session_id"],
@@ -195,6 +199,25 @@ def churn_node(state: OrchestratorState) -> OrchestratorState:
 def action_execution_node(state: OrchestratorState) -> OrchestratorState:
     task_type = state["task_type"]
     action_type, payload = "send_sequences", {}
+
+    if task_type == "cold_outreach" and not state["input_data"].get("auto_send", False):
+        skipped = {
+            "status": "success",
+            "data": {
+                "action_type": "send_sequences",
+                "executed_actions": [],
+                "total_actions": 0,
+                "emails_sent": 0,
+                "crm_updates": 0,
+                "auto_send": False,
+                "message": "Auto-send disabled. Sequences are ready for human review and manual send.",
+                "timestamp": now_iso(),
+            },
+            "reasoning": "Skipped automatic email sending because auto_send=false.",
+            "confidence": 1.0,
+            "agent_name": "action_agent",
+        }
+        return _update_state(state, "action_agent", skipped)
 
     if task_type == "cold_outreach":
         sequences = state["agent_outputs"].get("outreach_agent", {}).get("data", {}).get("sequences", [])

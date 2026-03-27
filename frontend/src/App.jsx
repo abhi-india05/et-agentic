@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { useEffect, useState } from 'react'
 import Sidebar from './components/Sidebar.jsx'
 import Overview from './pages/Overview.jsx'
 import OutreachPage from './pages/OutreachPage.jsx'
@@ -7,12 +8,29 @@ import ChurnPage from './pages/ChurnPage.jsx'
 import PipelinePage from './pages/PipelinePage.jsx'
 import EmailsPage from './pages/EmailsPage.jsx'
 import LogsPage from './pages/LogsPage.jsx'
+import LoginPage from './pages/LoginPage.jsx'
+import { getAuthToken, setAuthToken } from './utils/api.js'
 
 export default function App() {
+  const [isAuthed, setIsAuthed] = useState(Boolean(getAuthToken()))
+
+  useEffect(() => {
+    const onExpired = () => setIsAuthed(false)
+    window.addEventListener('auth:expired', onExpired)
+    return () => window.removeEventListener('auth:expired', onExpired)
+  }, [])
+
+  if (!isAuthed) {
+    return <LoginPage onLogin={() => setIsAuthed(true)} />
+  }
+
   return (
     <BrowserRouter>
       <div className="min-h-screen bg-void bg-grid">
-        <Sidebar />
+        <Sidebar onLogout={() => {
+          setAuthToken('')
+          setIsAuthed(false)
+        }} />
         <main className="ml-56 min-h-screen">
           <div className="max-w-6xl mx-auto px-6 py-8">
             <Routes>

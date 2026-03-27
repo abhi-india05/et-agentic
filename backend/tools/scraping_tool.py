@@ -1,5 +1,7 @@
+import csv
+import os
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 from backend.utils.logger import get_logger
 from backend.utils.helpers import generate_id, now_iso
 
@@ -27,6 +29,65 @@ COMPANY_SIGNALS = {
 
 def enrich_company(company: str, industry: str = "default") -> Dict[str, Any]:
     logger.info("Enriching company data", company=company, industry=industry)
+    # First, attempt to load leads from a CSV dataset if provided.
+    csv_paths: List[str] = []
+    env_path = os.environ.get("LINKEDIN_CSV_PATH")
+    if env_path:
+        csv_paths.append(env_path)
+
+    # Common locations to check
+    csv_paths.extend([
+        os.path.join(os.path.dirname(__file__), "..", "data", "linkedin.csv"),
+        os.path.join(os.path.dirname(__file__), "..", "..", "data", "linkedin.csv"),
+        os.path.join(os.getcwd(), "data", "linkedin.csv"),
+    ])
+
+    found_rows = []
+    for p in csv_paths:
+        try:
+            p = os.path.abspath(p)
+            if not os.path.exists(p):
+                continue
+            with open(p, newline="", encoding="utf-8") as fh:
+                reader = csv.DictReader(fh)
+                for row in reader:
+                    # Gather possible company fields from the CSV row to support different export formats
+                    candidate_keys = [
+                        "company",
+                        "company_name",
+                        "row_company",
+                        "full_name",
+                        "occupation",
+                        "experiences0company",
+                        "experiences1company",
+                        "experiences0company_linkedin_profile_url",
+                    ]
+                    row_company = ""
+                    for k in candidate_keys:
+                        v = (row.get(k) or "").strip()
+                        if v:
+                            # prefer short tokens that look like a company name
+                            row_company = v
+                            break
+
+                    # If still empty, try to infer from headline/occupation fields
+                    if not row_company:
+                        row_company = (row.get("headline") or row.get("summary") or "").strip()
+
+                    if not row_company:
+                        continue
+
+                    # Case-insensitive substring match to allow loose matches like 'Vodafone' vs 'vodafone'
+                    try:
+                        if company.lower() in row_company.lower() or row_company.lower() in company.lower():
+                            found_rows.append(row)
+                    except Exception:
+                        continue
+            if found_rows:
+                logger.info("Loaded leads from CSV", path=p, matches=len(found_rows))
+                break
+        except Exception:
+            continue
 
     industry_key = industry.lower().split()[0] if industry else "default"
     personas = INDUSTRY_PERSONAS.get(industry_key, INDUSTRY_PERSONAS["default"])
@@ -35,24 +96,48 @@ def enrich_company(company: str, industry: str = "default") -> Dict[str, Any]:
     domain = f"{slug}.com"
 
     leads = []
-    for i, title in enumerate(personas[:2]):
-        first_names = ["Alex", "Jordan", "Morgan", "Taylor", "Casey"]
-        last_names = ["Smith", "Johnson", "Williams", "Brown", "Davis"]
-        first = first_names[i % len(first_names)]
-        last = last_names[i % len(last_names)]
-        email_format = f"{first.lower()}.{last.lower()}@{domain}"
+    if found_rows:
+        for i, row in enumerate(found_rows[:5]):
+            name = (row.get("name") or row.get("full_name") or "").strip()
+            title = (row.get("title") or row.get("job_title") or personas[i % len(personas)]).strip()
+            email = (row.get("email") or row.get("work_email") or "").strip()
+            linkedin = (row.get("linkedin") or row.get("linkedin_url") or "").strip()
+            try:
+                score = float(row.get("score") or row.get("ranking") or 0.7)
+            except Exception:
+                score = 0.7
 
-        leads.append({
-            "lead_id": generate_id("lead"),
-            "name": f"{first} {last}",
-            "title": title,
-            "company": company,
-            "email": email_format,
-            "linkedin": f"https://linkedin.com/in/{first.lower()}-{last.lower()}",
-            "score": round(0.65 + (i * 0.1), 2),
-            "signals": list(COMPANY_SIGNALS.values())[:2],
-            "enriched_at": now_iso(),
-        })
+            leads.append({
+                "lead_id": generate_id("lead"),
+                "name": name or f"Lead {i+1}",
+                "title": title,
+                "company": company,
+                "email": email,
+                "linkedin": linkedin,
+                "score": round(score, 2),
+                "signals": list(COMPANY_SIGNALS.values())[:2],
+                "enriched_at": now_iso(),
+            })
+    else:
+        # Fallback: synthesize leads as before when no CSV data is available.
+        for i, title in enumerate(personas[:2]):
+            first_names = ["Alex", "Jordan", "Morgan", "Taylor", "Casey"]
+            last_names = ["Smith", "Johnson", "Williams", "Brown", "Davis"]
+            first = first_names[i % len(first_names)]
+            last = last_names[i % len(last_names)]
+            email_format = f"{first.lower()}.{last.lower()}@{domain}"
+
+            leads.append({
+                "lead_id": generate_id("lead"),
+                "name": f"{first} {last}",
+                "title": title,
+                "company": company,
+                "email": email_format,
+                "linkedin": f"https://linkedin.com/in/{first.lower()}-{last.lower()}",
+                "score": round(0.65 + (i * 0.1), 2),
+                "signals": list(COMPANY_SIGNALS.values())[:2],
+                "enriched_at": now_iso(),
+            })
 
     signals = [
         "Active on LinkedIn with posts about scaling challenges",

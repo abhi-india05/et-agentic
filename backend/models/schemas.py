@@ -65,6 +65,20 @@ class OutreachRequest(BaseModel):
     size: str
     website: Optional[str] = None
     notes: Optional[str] = None
+    product_name: Optional[str] = None
+    product_description: Optional[str] = None
+    auto_send: bool = False
+
+
+class AuthLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class AuthTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
 
 
 class RiskDetectionRequest(BaseModel):
@@ -84,6 +98,24 @@ class SendEmailRequest(BaseModel):
     subject: str
     body_text: str
     body_html: Optional[str] = None
+
+
+class ReviewedEmail(BaseModel):
+    subject: str
+    body: str
+    from_email: Optional[str] = None
+    from_name: Optional[str] = None
+
+
+class ReviewedSequence(BaseModel):
+    lead_email: str
+    lead_name: Optional[str] = ""
+    sequence_id: Optional[str] = None
+    emails: List[ReviewedEmail] = Field(default_factory=list)
+
+
+class SendSequencesRequest(BaseModel):
+    sequences: List[ReviewedSequence] = Field(default_factory=list)
 
 
 class OrchestratorState(BaseModel):

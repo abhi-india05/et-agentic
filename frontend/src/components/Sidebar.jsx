@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard, Zap, AlertTriangle, TrendingDown,
-  ScrollText, Mail, Activity, Cpu
+  ScrollText, Mail, Activity, Cpu, LogOut
 } from 'lucide-react'
 
 const NAV = [
@@ -14,7 +14,7 @@ const NAV = [
   { to: '/logs', icon: ScrollText, label: 'Audit Logs' },
 ]
 
-export default function Sidebar() {
+export default function Sidebar({ onLogout }) {
   return (
     <aside className="fixed left-0 top-0 h-screen w-56 bg-surface border-r border-border flex flex-col z-50">
       <div className="px-5 py-5 border-b border-border">
@@ -50,9 +50,19 @@ export default function Sidebar() {
       </nav>
 
       <div className="px-4 py-4 border-t border-border">
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-success animate-pulse-slow" />
-          <span className="text-xs text-muted font-mono">All agents online</span>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-success animate-pulse-slow" />
+            <span className="text-xs text-muted font-mono">All agents online</span>
+          </div>
+          <button
+            onClick={onLogout}
+            className="text-xs text-muted hover:text-text flex items-center gap-1"
+            title="Log out"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            Logout
+          </button>
         </div>
       </div>
     </aside>

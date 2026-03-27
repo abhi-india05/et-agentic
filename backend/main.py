@@ -1,9 +1,12 @@
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import JWTError, jwt
 
 from backend.config.settings import settings
 from backend.utils.logger import configure_logging, get_logger, get_all_logs, get_logs_by_session
@@ -13,7 +16,15 @@ configure_logging(log_level=settings.log_level, environment=settings.environment
 
 import asyncio
 
-from backend.models.schemas import OutreachRequest, RiskDetectionRequest, ChurnPredictionRequest, SendEmailRequest
+from backend.models.schemas import (
+    AuthLoginRequest,
+    AuthTokenResponse,
+    OutreachRequest,
+    RiskDetectionRequest,
+    ChurnPredictionRequest,
+    SendEmailRequest,
+    SendSequencesRequest,
+)
 from backend.agents.orchestrator import run_orchestrator
 from backend.agents.failure_recovery import get_recovery_engine
 from backend.tools.email_tool import get_email_stats, get_sent_emails, get_email_client
@@ -23,6 +34,44 @@ from backend.memory.vector_store import get_vector_store
 logger = get_logger("main")
 
 _active_sessions: Dict[str, Dict[str, Any]] = {}
+_bearer = HTTPBearer(auto_error=False)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _create_access_token(subject: str) -> str:
+    expire = _utcnow() + timedelta(minutes=settings.auth_token_expire_minutes)
+    payload = {"sub": subject, "exp": expire}
+    return jwt.encode(payload, settings.auth_secret_key, algorithm=settings.auth_algorithm)
+
+
+def _require_auth(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+) -> Dict[str, Any]:
+    if not settings.auth_enabled:
+        return {"username": "anonymous"}
+
+    if not credentials or credentials.scheme.lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid authentication token",
+        )
+
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(
+            token,
+            settings.auth_secret_key,
+            algorithms=[settings.auth_algorithm],
+        )
+        username = payload.get("sub")
+        if not username:
+            raise HTTPException(status_code=401, detail="Invalid token payload")
+        return {"username": username}
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Token verification failed")
 
 
 @asynccontextmanager
@@ -124,8 +173,27 @@ async def health_check():
     }
 
 
+@app.post("/auth/login", response_model=AuthTokenResponse)
+async def auth_login(req: AuthLoginRequest):
+    if not settings.auth_enabled:
+        token = _create_access_token("anonymous")
+        return AuthTokenResponse(
+            access_token=token,
+            expires_in=settings.auth_token_expire_minutes * 60,
+        )
+
+    if req.username != settings.auth_username or req.password != settings.auth_password:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    token = _create_access_token(req.username)
+    return AuthTokenResponse(
+        access_token=token,
+        expires_in=settings.auth_token_expire_minutes * 60,
+    )
+
+
 @app.post("/run-outreach")
-async def run_outreach(request: OutreachRequest):
+async def run_outreach(request: OutreachRequest, _user: Dict[str, Any] = Depends(_require_auth)):
     session_id = generate_session_id()
     logger.info("outreach_request", company=request.company, session_id=session_id)
     _start_session(session_id, "cold_outreach")
@@ -139,6 +207,9 @@ async def run_outreach(request: OutreachRequest):
                 "size": request.size,
                 "website": request.website,
                 "notes": request.notes,
+                "product_name": request.product_name,
+                "product_description": request.product_description,
+                "auto_send": request.auto_send,
             },
             session_id=session_id,
         )
@@ -157,7 +228,7 @@ async def run_outreach(request: OutreachRequest):
 
 
 @app.post("/detect-risk")
-async def detect_risk(request: RiskDetectionRequest):
+async def detect_risk(request: RiskDetectionRequest, _user: Dict[str, Any] = Depends(_require_auth)):
     session_id = generate_session_id()
     logger.info("risk_detection_request", session_id=session_id)
     _start_session(session_id, "risk_detection")
@@ -186,7 +257,7 @@ async def detect_risk(request: RiskDetectionRequest):
 
 
 @app.post("/predict-churn")
-async def predict_churn(request: ChurnPredictionRequest):
+async def predict_churn(request: ChurnPredictionRequest, _user: Dict[str, Any] = Depends(_require_auth)):
     session_id = generate_session_id()
     logger.info("churn_prediction_request", session_id=session_id)
     _start_session(session_id, "churn_prediction")
@@ -214,13 +285,17 @@ async def predict_churn(request: ChurnPredictionRequest):
 
 
 @app.get("/logs")
-async def get_logs(session_id: Optional[str] = None, limit: int = 100):
+async def get_logs(
+    session_id: Optional[str] = None,
+    limit: int = 100,
+    _user: Dict[str, Any] = Depends(_require_auth),
+):
     logs = get_logs_by_session(session_id) if session_id else get_all_logs()
     return {"logs": logs[:limit], "total": len(logs), "timestamp": now_iso()}
 
 
 @app.get("/pipeline")
-async def get_pipeline():
+async def get_pipeline(_user: Dict[str, Any] = Depends(_require_auth)):
     return {
         "stats": get_pipeline_stats(),
         "accounts": get_all_accounts()[:20],
@@ -229,7 +304,7 @@ async def get_pipeline():
 
 
 @app.get("/emails")
-async def get_emails(limit: int = 50):
+async def get_emails(limit: int = 50, _user: Dict[str, Any] = Depends(_require_auth)):
     return {
         "emails": get_sent_emails()[:limit],
         "stats": get_email_stats(),
@@ -237,7 +312,7 @@ async def get_emails(limit: int = 50):
     }
 
 @app.post("/send-email")
-async def send_email(req: SendEmailRequest):
+async def send_email(req: SendEmailRequest, _user: Dict[str, Any] = Depends(_require_auth)):
     # Send via SMTP if configured, otherwise this will be recorded as mock.
     client = get_email_client()
     result = await asyncio.to_thread(
@@ -253,8 +328,47 @@ async def send_email(req: SendEmailRequest):
     return {"result": result, "timestamp": now_iso()}
 
 
+@app.post("/send-sequences")
+async def send_sequences(req: SendSequencesRequest, _user: Dict[str, Any] = Depends(_require_auth)):
+    client = get_email_client()
+    all_results = []
+    total_sent = 0
+    total_failed = 0
+
+    for seq in req.sequences:
+        email_payloads = [
+            {
+                "subject": e.subject,
+                "body": e.body,
+                "from_email": e.from_email,
+                "from_name": e.from_name,
+            }
+            for e in seq.emails
+        ]
+        result = await asyncio.to_thread(
+            client.send_sequence,
+            to_email=seq.lead_email,
+            to_name=seq.lead_name or "",
+            emails=email_payloads,
+            sequence_id=seq.sequence_id or generate_session_id(),
+        )
+        all_results.append(result)
+        total_sent += int(result.get("sent", 0))
+        total_failed += int(result.get("failed", 0))
+
+    return {
+        "results": all_results,
+        "summary": {
+            "total_sequences": len(all_results),
+            "sent": total_sent,
+            "failed": total_failed,
+        },
+        "timestamp": now_iso(),
+    }
+
+
 @app.get("/sessions")
-async def get_sessions():
+async def get_sessions(_user: Dict[str, Any] = Depends(_require_auth)):
     return {
         "sessions": _active_sessions,
         "total": len(_active_sessions),
@@ -264,17 +378,17 @@ async def get_sessions():
 
 
 @app.get("/memory/stats")
-async def get_memory_stats():
+async def get_memory_stats(_user: Dict[str, Any] = Depends(_require_auth)):
     return get_vector_store().stats()
 
 
 @app.get("/recovery-report")
-async def recovery_report():
+async def recovery_report(_user: Dict[str, Any] = Depends(_require_auth)):
     return get_recovery_engine().get_recovery_report()
 
 
 @app.delete("/memory/clear")
-async def clear_memory():
+async def clear_memory(_user: Dict[str, Any] = Depends(_require_auth)):
     if settings.environment == "production":
         raise HTTPException(status_code=403, detail="Not available in production.")
     get_vector_store().clear()

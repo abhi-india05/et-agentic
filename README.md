@@ -86,6 +86,12 @@ MAIL_FROM=you@gmail.com        # Optional — sender address (usually same as us
 OPENAI_MODEL=gemini-1.5-pro    # Model to use
 OPENAI_EMBEDDING_MODEL=text-embedding-004
 ENVIRONMENT=development        # development | production
+AUTH_ENABLED=true              # Enable/disable API auth middleware
+AUTH_USERNAME=admin            # Login username
+AUTH_PASSWORD=admin123         # Login password
+AUTH_SECRET_KEY=change-me      # JWT signing secret (change in real env)
+AUTH_ALGORITHM=HS256
+AUTH_TOKEN_EXPIRE_MINUTES=480
 ```
 
 > **Note:** If `MAIL_USERNAME`, `MAIL_PASSWORD`, and `MAIL_FROM` are not set, emails run in mock mode (logged/stored in memory) — all functionality works.
@@ -97,6 +103,7 @@ ENVIRONMENT=development        # development | production
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/run-outreach` | Cold outreach pipeline |
+| `POST` | `/auth/login` | Obtain bearer token |
 | `POST` | `/detect-risk` | Deal risk detection |
 | `POST` | `/predict-churn` | Churn prediction |
 | `GET` | `/logs` | Audit logs |
@@ -109,9 +116,12 @@ ENVIRONMENT=development        # development | production
 
 **Cold Outreach:**
 ```bash
+TOKEN=$(curl -s -X POST http://localhost:8000/auth/login -H "Content-Type: application/json" -d '{"username":"admin","password":"admin123"}' | python -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
 curl -X POST http://localhost:8000/run-outreach \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"company":"Acme Corp","industry":"SaaS","size":"51-200"}'
+  -d '{"company":"Acme Corp","industry":"SaaS","size":"51-200","product_name":"RevOps Copilot","product_description":"AI assistant for revenue teams to identify risk and automate follow-ups"}'
 ```
 
 **Risk Detection:**

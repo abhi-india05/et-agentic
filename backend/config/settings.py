@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     faiss_index_path: str = Field("./memory/faiss_index", env="FAISS_INDEX_PATH")
     confidence_threshold: float = Field(0.6, env="CONFIDENCE_THRESHOLD")
 
+    # API authentication
+    auth_enabled: bool = Field(True, env="AUTH_ENABLED")
+    auth_username: str = Field("admin", env="AUTH_USERNAME")
+    auth_password: str = Field("admin123", env="AUTH_PASSWORD")
+    auth_secret_key: str = Field("change-me", env="AUTH_SECRET_KEY")
+    auth_algorithm: str = Field("HS256", env="AUTH_ALGORITHM")
+    auth_token_expire_minutes: int = Field(480, env="AUTH_TOKEN_EXPIRE_MINUTES")
+
     class Config:
         # Support running from repo root or from /backend.
         env_file = (".env", "backend/.env")

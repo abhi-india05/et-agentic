@@ -151,6 +151,8 @@ class EmailClient:
                 to_name=to_name,
                 subject=email.get("subject", f"Follow-up #{i}"),
                 body_text=email.get("body", ""),
+                from_email=email.get("from_email", "sales@revops-ai.com"),
+                from_name=email.get("from_name", "RevOps AI"),
                 sequence_id=sequence_id,
                 sequence_step=i,
             )
