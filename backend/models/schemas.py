@@ -1,7 +1,19 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Any, Dict, List, Optional
 from enum import Enum
 from datetime import datetime
+
+from backend.config.settings import settings
+
+def _clean_optional_text(value: Optional[str], *, max_len: int) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return str(value)
+    cleaned = " ".join(value.split()).strip()
+    if not cleaned:
+        return None
+    return cleaned[:max_len]
 
 
 class AgentStatus(str, Enum):
@@ -69,16 +81,77 @@ class OutreachRequest(BaseModel):
     product_description: Optional[str] = None
     auto_send: bool = False
 
+    @field_validator("company", "industry", "size")
+    @classmethod
+    def _required_text(cls, v: str) -> str:
+        cleaned = _clean_optional_text(v, max_len=200)
+        if not cleaned:
+            raise ValueError("Field is required")
+        return cleaned
+
+    @field_validator("website", "notes", "product_name")
+    @classmethod
+    def _optional_short_text(cls, v: Optional[str]) -> Optional[str]:
+        return _clean_optional_text(v, max_len=500)
+
+    @field_validator("product_description")
+    @classmethod
+    def _optional_description(cls, v: Optional[str]) -> Optional[str]:
+        return _clean_optional_text(v, max_len=5000)
+
 
 class AuthLoginRequest(BaseModel):
     username: str
     password: str
+
+    @field_validator("username")
+    @classmethod
+    def _username(cls, v: str) -> str:
+        cleaned = _clean_optional_text(v, max_len=64)
+        if not cleaned:
+            raise ValueError("Username is required")
+        return cleaned
+
+    @field_validator("password")
+    @classmethod
+    def _password(cls, v: str) -> str:
+        min_len = int(getattr(settings, "auth_password_min_length", 8) or 8)
+        if not isinstance(v, str) or len(v) < min_len:
+            raise ValueError(f"Password must be at least {min_len} characters")
+        return v
+
+
+class AuthRegisterRequest(BaseModel):
+    username: str
+    password: str
+
+    @field_validator("username")
+    @classmethod
+    def _reg_username(cls, v: str) -> str:
+        cleaned = _clean_optional_text(v, max_len=64)
+        if not cleaned:
+            raise ValueError("Username is required")
+        return cleaned
+
+    @field_validator("password")
+    @classmethod
+    def _reg_password(cls, v: str) -> str:
+        min_len = int(getattr(settings, "auth_password_min_length", 8) or 8)
+        if not isinstance(v, str) or len(v) < min_len:
+            raise ValueError(f"Password must be at least {min_len} characters")
+        return v
 
 
 class AuthTokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
+
+
+class AuthMeResponse(BaseModel):
+    user_id: str
+    username: str
+    is_admin: bool = False
 
 
 class RiskDetectionRequest(BaseModel):
@@ -162,3 +235,45 @@ class CRMAccount(BaseModel):
     nps_score: float
     industry: str
     employee_count: int
+
+
+class ProductCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=5000)
+
+    @field_validator("name")
+    @classmethod
+    def _product_name(cls, v: str) -> str:
+        cleaned = _clean_optional_text(v, max_len=200)
+        if not cleaned:
+            raise ValueError("Name is required")
+        return cleaned
+
+    @field_validator("description")
+    @classmethod
+    def _product_description(cls, v: Optional[str]) -> Optional[str]:
+        return _clean_optional_text(v, max_len=5000)
+
+
+class ProductUpdateRequest(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=5000)
+
+    @field_validator("name")
+    @classmethod
+    def _product_update_name(cls, v: Optional[str]) -> Optional[str]:
+        return _clean_optional_text(v, max_len=200)
+
+    @field_validator("description")
+    @classmethod
+    def _product_update_description(cls, v: Optional[str]) -> Optional[str]:
+        return _clean_optional_text(v, max_len=5000)
+
+
+class ProductResponse(BaseModel):
+    product_id: str
+    owner_user_id: str
+    name: str
+    description: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime

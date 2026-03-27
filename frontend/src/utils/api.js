@@ -1,22 +1,19 @@
 const BASE = '/api'
 
-const AUTH_TOKEN_KEY = 'revops_access_token'
+let inMemoryToken = ''
 
 export function getAuthToken() {
-  return localStorage.getItem(AUTH_TOKEN_KEY) || ''
+  return inMemoryToken || ''
 }
 
 export function setAuthToken(token) {
-  if (!token) {
-    localStorage.removeItem(AUTH_TOKEN_KEY)
-    return
-  }
-  localStorage.setItem(AUTH_TOKEN_KEY, token)
+  inMemoryToken = token || ''
 }
 
 async function request(path, options = {}) {
   const token = getAuthToken()
   const res = await fetch(`${BASE}${path}`, {
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -32,17 +29,25 @@ async function request(path, options = {}) {
     const err = await res.json().catch(() => ({ detail: 'Network error' }))
     throw new Error(err.detail || `HTTP ${res.status}`)
   }
+  if (res.status === 204) return null
   return res.json()
 }
 
 export const api = {
   login: (body) => request('/auth/login', { method: 'POST', body: JSON.stringify(body) }),
+  register: (body) => request('/auth/register', { method: 'POST', body: JSON.stringify(body) }),
+  logout: () => request('/auth/logout', { method: 'POST' }),
+  me: () => request('/auth/me'),
   health: () => request('/health'),
   pipeline: () => request('/pipeline'),
   logs: (sessionId) => request(`/logs${sessionId ? `?session_id=${sessionId}` : ''}`),
   emails: () => request('/emails'),
   sessions: () => request('/sessions'),
   memoryStats: () => request('/memory/stats'),
+  products: (limit = 50) => request(`/products?limit=${limit}`),
+  createProduct: (body) => request('/products', { method: 'POST', body: JSON.stringify(body) }),
+  product: (id) => request(`/products/${id}`),
+  updateProduct: (id, body) => request(`/products/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
 
   runOutreach: (body) =>
     request('/run-outreach', { method: 'POST', body: JSON.stringify(body) }),

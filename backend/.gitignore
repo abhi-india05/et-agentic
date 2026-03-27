@@ -89,3 +89,6 @@ Thumbs.db
 
 data/
 ../__pycache__
+
+tests
+../venv

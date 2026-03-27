@@ -1,14 +1,17 @@
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwt
 
 from backend.config.settings import settings
+from backend.auth.deps import AuthUser, get_current_user
+from backend.auth.jwt import create_access_token
+from backend.auth.passwords import hash_password, verify_password
+from backend.deps import get_product_repo, get_user_repo
+from backend.repositories.products import ProductRepository
+from backend.repositories.users import UserRepository
 from backend.utils.logger import configure_logging, get_logger, get_all_logs, get_logs_by_session
 from backend.utils.helpers import generate_session_id, now_iso
 
@@ -18,7 +21,12 @@ import asyncio
 
 from backend.models.schemas import (
     AuthLoginRequest,
+    AuthMeResponse,
+    AuthRegisterRequest,
     AuthTokenResponse,
+    ProductCreateRequest,
+    ProductResponse,
+    ProductUpdateRequest,
     OutreachRequest,
     RiskDetectionRequest,
     ChurnPredictionRequest,
@@ -34,44 +42,27 @@ from backend.memory.vector_store import get_vector_store
 logger = get_logger("main")
 
 _active_sessions: Dict[str, Dict[str, Any]] = {}
-_bearer = HTTPBearer(auto_error=False)
 
 
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+def _set_auth_cookie(response: Response, token: str, *, max_age_seconds: int) -> None:
+    response.set_cookie(
+        key=settings.auth_cookie_name,
+        value=token,
+        httponly=True,
+        secure=settings.resolved_auth_cookie_secure,
+        samesite=settings.auth_cookie_samesite,
+        domain=settings.auth_cookie_domain,
+        max_age=max_age_seconds,
+        path="/",
+    )
 
 
-def _create_access_token(subject: str) -> str:
-    expire = _utcnow() + timedelta(minutes=settings.auth_token_expire_minutes)
-    payload = {"sub": subject, "exp": expire}
-    return jwt.encode(payload, settings.auth_secret_key, algorithm=settings.auth_algorithm)
-
-
-def _require_auth(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
-) -> Dict[str, Any]:
-    if not settings.auth_enabled:
-        return {"username": "anonymous"}
-
-    if not credentials or credentials.scheme.lower() != "bearer":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing or invalid authentication token",
-        )
-
-    token = credentials.credentials
-    try:
-        payload = jwt.decode(
-            token,
-            settings.auth_secret_key,
-            algorithms=[settings.auth_algorithm],
-        )
-        username = payload.get("sub")
-        if not username:
-            raise HTTPException(status_code=401, detail="Invalid token payload")
-        return {"username": username}
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Token verification failed")
+def _clear_auth_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=settings.auth_cookie_name,
+        domain=settings.auth_cookie_domain,
+        path="/",
+    )
 
 
 @asynccontextmanager
@@ -85,6 +76,15 @@ async def lifespan(app: FastAPI):
         has_openai_key=settings.has_openai_key,
         mock_email=settings.is_mock_email,
     )
+
+    if settings.auth_enabled:
+        secret = (settings.auth_secret_key or "").strip()
+        if secret == "change-me" or len(secret) < 32:
+            msg = "AUTH_SECRET_KEY is weak (use a random 32+ char secret)"
+            if (settings.environment or "").strip().lower() == "production":
+                raise RuntimeError(msg)
+            logger.warning("weak_auth_secret", detail=msg)
+
     store = get_vector_store()
     store.load()
     logger.info("vector_store_ready", **store.stats())
@@ -174,26 +174,129 @@ async def health_check():
 
 
 @app.post("/auth/login", response_model=AuthTokenResponse)
-async def auth_login(req: AuthLoginRequest):
-    if not settings.auth_enabled:
-        token = _create_access_token("anonymous")
-        return AuthTokenResponse(
-            access_token=token,
-            expires_in=settings.auth_token_expire_minutes * 60,
-        )
+async def auth_login(
+    req: AuthLoginRequest,
+    response: Response,
+    user_repo: UserRepository = Depends(get_user_repo),
+):
+    expires = settings.auth_token_expire_minutes * 60
 
-    if req.username != settings.auth_username or req.password != settings.auth_password:
+    if not settings.auth_enabled:
+        token = create_access_token(subject="anonymous", username="anonymous", is_admin=False)
+        _set_auth_cookie(response, token, max_age_seconds=expires)
+        return AuthTokenResponse(access_token=token, expires_in=expires)
+
+    # Back-compat admin login from env.
+    if req.username == settings.auth_username and req.password == settings.auth_password:
+        token = create_access_token(subject=settings.auth_username, username=req.username, is_admin=True)
+        _set_auth_cookie(response, token, max_age_seconds=expires)
+        return AuthTokenResponse(access_token=token, expires_in=expires)
+
+    user = await user_repo.get_by_username(req.username)
+    if not user or not verify_password(req.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    token = _create_access_token(req.username)
-    return AuthTokenResponse(
-        access_token=token,
-        expires_in=settings.auth_token_expire_minutes * 60,
+    token = create_access_token(subject=user.user_id, username=user.username, is_admin=False)
+    _set_auth_cookie(response, token, max_age_seconds=expires)
+    return AuthTokenResponse(access_token=token, expires_in=expires)
+
+
+@app.post("/auth/register", response_model=AuthTokenResponse)
+async def auth_register(
+    req: AuthRegisterRequest,
+    response: Response,
+    user_repo: UserRepository = Depends(get_user_repo),
+):
+    if not settings.auth_enabled:
+        raise HTTPException(status_code=400, detail="Registration is disabled when AUTH_ENABLED=false")
+
+    if req.username == settings.auth_username:
+        raise HTTPException(status_code=409, detail="Username is reserved")
+
+    try:
+        user = await user_repo.create_user(username=req.username, password_hash=hash_password(req.password))
+    except Exception as e:
+        msg = str(e).lower()
+        if "duplicate" in msg or "exists" in msg:
+            raise HTTPException(status_code=409, detail="Username already exists")
+        raise
+
+    expires = settings.auth_token_expire_minutes * 60
+    token = create_access_token(subject=user.user_id, username=user.username, is_admin=False)
+    _set_auth_cookie(response, token, max_age_seconds=expires)
+    return AuthTokenResponse(access_token=token, expires_in=expires)
+
+
+@app.post("/auth/logout")
+async def auth_logout(response: Response):
+    _clear_auth_cookie(response)
+    return {"ok": True, "timestamp": now_iso()}
+
+
+@app.get("/auth/me", response_model=AuthMeResponse)
+async def auth_me(user: AuthUser = Depends(get_current_user)):
+    return AuthMeResponse(user_id=user.user_id, username=user.username, is_admin=user.is_admin)
+
+
+@app.post("/products", response_model=ProductResponse)
+async def create_product(
+    req: ProductCreateRequest,
+    user: AuthUser = Depends(get_current_user),
+    repo: ProductRepository = Depends(get_product_repo),
+):
+    product = await repo.create_product(owner_user_id=user.user_id, name=req.name, description=req.description)
+    return ProductResponse(**product.__dict__)
+
+
+@app.get("/products", response_model=List[ProductResponse])
+async def list_products(
+    limit: int = 50,
+    user: AuthUser = Depends(get_current_user),
+    repo: ProductRepository = Depends(get_product_repo),
+):
+    products = await repo.list_products(owner_user_id=user.user_id, limit=limit)
+    return [ProductResponse(**p.__dict__) for p in products]
+
+
+@app.get("/products/{product_id}", response_model=ProductResponse)
+async def get_product(
+    product_id: str,
+    user: AuthUser = Depends(get_current_user),
+    repo: ProductRepository = Depends(get_product_repo),
+):
+    product = await repo.get_product(owner_user_id=user.user_id, product_id=product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return ProductResponse(**product.__dict__)
+
+
+@app.put("/products/{product_id}", response_model=ProductResponse)
+async def update_product(
+    product_id: str,
+    req: ProductUpdateRequest,
+    user: AuthUser = Depends(get_current_user),
+    repo: ProductRepository = Depends(get_product_repo),
+):
+    fields_set = getattr(req, "model_fields_set", set())
+    name_set = "name" in fields_set
+    desc_set = "description" in fields_set
+    if name_set and not req.name:
+        raise HTTPException(status_code=422, detail="Name cannot be empty")
+    product = await repo.update_product(
+        owner_user_id=user.user_id,
+        product_id=product_id,
+        name=req.name,
+        description=req.description,
+        name_set=name_set,
+        description_set=desc_set,
     )
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return ProductResponse(**product.__dict__)
 
 
 @app.post("/run-outreach")
-async def run_outreach(request: OutreachRequest, _user: Dict[str, Any] = Depends(_require_auth)):
+async def run_outreach(request: OutreachRequest, _user: AuthUser = Depends(get_current_user)):
     session_id = generate_session_id()
     logger.info("outreach_request", company=request.company, session_id=session_id)
     _start_session(session_id, "cold_outreach")
@@ -228,7 +331,7 @@ async def run_outreach(request: OutreachRequest, _user: Dict[str, Any] = Depends
 
 
 @app.post("/detect-risk")
-async def detect_risk(request: RiskDetectionRequest, _user: Dict[str, Any] = Depends(_require_auth)):
+async def detect_risk(request: RiskDetectionRequest, _user: AuthUser = Depends(get_current_user)):
     session_id = generate_session_id()
     logger.info("risk_detection_request", session_id=session_id)
     _start_session(session_id, "risk_detection")
@@ -257,7 +360,7 @@ async def detect_risk(request: RiskDetectionRequest, _user: Dict[str, Any] = Dep
 
 
 @app.post("/predict-churn")
-async def predict_churn(request: ChurnPredictionRequest, _user: Dict[str, Any] = Depends(_require_auth)):
+async def predict_churn(request: ChurnPredictionRequest, _user: AuthUser = Depends(get_current_user)):
     session_id = generate_session_id()
     logger.info("churn_prediction_request", session_id=session_id)
     _start_session(session_id, "churn_prediction")
@@ -288,14 +391,14 @@ async def predict_churn(request: ChurnPredictionRequest, _user: Dict[str, Any] =
 async def get_logs(
     session_id: Optional[str] = None,
     limit: int = 100,
-    _user: Dict[str, Any] = Depends(_require_auth),
+    _user: AuthUser = Depends(get_current_user),
 ):
     logs = get_logs_by_session(session_id) if session_id else get_all_logs()
     return {"logs": logs[:limit], "total": len(logs), "timestamp": now_iso()}
 
 
 @app.get("/pipeline")
-async def get_pipeline(_user: Dict[str, Any] = Depends(_require_auth)):
+async def get_pipeline(_user: AuthUser = Depends(get_current_user)):
     return {
         "stats": get_pipeline_stats(),
         "accounts": get_all_accounts()[:20],
@@ -304,7 +407,7 @@ async def get_pipeline(_user: Dict[str, Any] = Depends(_require_auth)):
 
 
 @app.get("/emails")
-async def get_emails(limit: int = 50, _user: Dict[str, Any] = Depends(_require_auth)):
+async def get_emails(limit: int = 50, _user: AuthUser = Depends(get_current_user)):
     return {
         "emails": get_sent_emails()[:limit],
         "stats": get_email_stats(),
@@ -312,7 +415,7 @@ async def get_emails(limit: int = 50, _user: Dict[str, Any] = Depends(_require_a
     }
 
 @app.post("/send-email")
-async def send_email(req: SendEmailRequest, _user: Dict[str, Any] = Depends(_require_auth)):
+async def send_email(req: SendEmailRequest, _user: AuthUser = Depends(get_current_user)):
     # Send via SMTP if configured, otherwise this will be recorded as mock.
     client = get_email_client()
     result = await asyncio.to_thread(
@@ -329,7 +432,7 @@ async def send_email(req: SendEmailRequest, _user: Dict[str, Any] = Depends(_req
 
 
 @app.post("/send-sequences")
-async def send_sequences(req: SendSequencesRequest, _user: Dict[str, Any] = Depends(_require_auth)):
+async def send_sequences(req: SendSequencesRequest, _user: AuthUser = Depends(get_current_user)):
     client = get_email_client()
     all_results = []
     total_sent = 0
@@ -368,7 +471,7 @@ async def send_sequences(req: SendSequencesRequest, _user: Dict[str, Any] = Depe
 
 
 @app.get("/sessions")
-async def get_sessions(_user: Dict[str, Any] = Depends(_require_auth)):
+async def get_sessions(_user: AuthUser = Depends(get_current_user)):
     return {
         "sessions": _active_sessions,
         "total": len(_active_sessions),
@@ -378,17 +481,17 @@ async def get_sessions(_user: Dict[str, Any] = Depends(_require_auth)):
 
 
 @app.get("/memory/stats")
-async def get_memory_stats(_user: Dict[str, Any] = Depends(_require_auth)):
+async def get_memory_stats(_user: AuthUser = Depends(get_current_user)):
     return get_vector_store().stats()
 
 
 @app.get("/recovery-report")
-async def recovery_report(_user: Dict[str, Any] = Depends(_require_auth)):
+async def recovery_report(_user: AuthUser = Depends(get_current_user)):
     return get_recovery_engine().get_recovery_report()
 
 
 @app.delete("/memory/clear")
-async def clear_memory(_user: Dict[str, Any] = Depends(_require_auth)):
+async def clear_memory(_user: AuthUser = Depends(get_current_user)):
     if settings.environment == "production":
         raise HTTPException(status_code=403, detail="Not available in production.")
     get_vector_store().clear()

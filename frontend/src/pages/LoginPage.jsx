@@ -4,6 +4,7 @@ import { api, setAuthToken } from '../utils/api.js'
 
 export default function LoginPage({ onLogin }) {
   const [form, setForm] = useState({ username: '', password: '' })
+  const [mode, setMode] = useState('login') // 'login' | 'register'
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -16,7 +17,7 @@ export default function LoginPage({ onLogin }) {
     setLoading(true)
     setError('')
     try {
-      const res = await api.login(form)
+      const res = mode === 'register' ? await api.register(form) : await api.login(form)
       setAuthToken(res.access_token)
       onLogin?.()
     } catch (err) {
@@ -30,8 +31,14 @@ export default function LoginPage({ onLogin }) {
     <div className="min-h-screen bg-void bg-grid flex items-center justify-center px-4">
       <div className="w-full max-w-md card space-y-5">
         <div>
-          <h1 className="text-xl font-display font-700 text-text">Sign in to RevOps AI</h1>
-          <p className="text-xs text-muted mt-1">Authenticate to access agent workflows and protected APIs.</p>
+          <h1 className="text-xl font-display font-700 text-text">
+            {mode === 'register' ? 'Create your account' : 'Sign in to RevOps AI'}
+          </h1>
+          <p className="text-xs text-muted mt-1">
+            {mode === 'register'
+              ? 'Register to access agent workflows and protected APIs.'
+              : 'Authenticate to access agent workflows and protected APIs.'}
+          </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-3">
@@ -69,7 +76,20 @@ export default function LoginPage({ onLogin }) {
             className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-50"
           >
             <LogIn className="w-4 h-4" />
-            {loading ? 'Signing in...' : 'Sign in'}
+            {loading
+              ? (mode === 'register' ? 'Creating account...' : 'Signing in...')
+              : (mode === 'register' ? 'Create account' : 'Sign in')}
+          </button>
+
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => setMode(mode === 'register' ? 'login' : 'register')}
+            className="w-full text-xs text-muted font-mono hover:text-text transition"
+          >
+            {mode === 'register'
+              ? 'Have an account? Sign in'
+              : 'New here? Create an account'}
           </button>
         </form>
       </div>

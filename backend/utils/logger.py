@@ -38,8 +38,8 @@ def configure_logging(log_level: str = "INFO", environment: str = "development")
             renderer,
         ],
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(),
-        wrapper_class=structlog.BoundLogger,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=True,
     )
 

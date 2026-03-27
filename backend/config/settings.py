@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     auth_secret_key: str = Field("change-me", env="AUTH_SECRET_KEY")
     auth_algorithm: str = Field("HS256", env="AUTH_ALGORITHM")
     auth_token_expire_minutes: int = Field(480, env="AUTH_TOKEN_EXPIRE_MINUTES")
+    auth_cookie_name: str = Field("revops_access_token", env="AUTH_COOKIE_NAME")
+    auth_cookie_samesite: str = Field("lax", env="AUTH_COOKIE_SAMESITE")
+    auth_cookie_secure: Optional[bool] = Field(None, env="AUTH_COOKIE_SECURE")
+    auth_cookie_domain: Optional[str] = Field(None, env="AUTH_COOKIE_DOMAIN")
+    auth_password_min_length: int = Field(8, env="AUTH_PASSWORD_MIN_LENGTH")
 
     class Config:
         # Support running from repo root or from /backend.
@@ -96,14 +101,18 @@ class Settings(BaseSettings):
 
     @property
     def is_mock_email(self) -> bool:
-        # Treat SMTP creds as the source of truth. If they're not provided, we
-        # operate in mock mode and just log/store emails in memory.
+       
         if not (self.mail_username and self.mail_password and self.mail_from):
             return True
-        # Common placeholder values should not accidentally enable "live" mode.
         placeholders = ("your_", "example.com", "changeme", "test", "dummy")
         joined = " ".join([self.mail_username, self.mail_password, self.mail_from]).lower()
         return any(p in joined for p in placeholders)
+
+    @property
+    def resolved_auth_cookie_secure(self) -> bool:
+        if self.auth_cookie_secure is not None:
+            return bool(self.auth_cookie_secure)
+        return (self.environment or "").strip().lower() == "production"
 
 
 settings = Settings()
