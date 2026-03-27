@@ -5,6 +5,8 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    # LLM configuration. We use the OpenAI client SDK for both native OpenAI
+    # and Gemini's OpenAI-compatible endpoint.
     openai_api_key: str = Field("", env="OPENAI_API_KEY")
     gemini_api_key: Optional[str] = Field(None, env="GEMINI_API_KEY")
     llm_provider: str = Field("openai", env="LLM_PROVIDER")
@@ -65,6 +67,7 @@ class Settings(BaseSettings):
 
     @property
     def has_openai_key(self) -> bool:
+        # Back-compat property name used across the existing codebase.
         return bool(self.llm_api_key)
 
     @property

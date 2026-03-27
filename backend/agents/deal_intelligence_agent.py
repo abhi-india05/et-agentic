@@ -1,10 +1,10 @@
 import json
 from typing import Any, Dict, List, Optional
 
-from openai import OpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from backend.config.settings import settings
+from backend.llm.client import get_llm_client
 from backend.tools.crm_tool import get_at_risk_deals, get_all_accounts
 from backend.tools.scraping_tool import detect_intent_signals
 from backend.memory.vector_store import get_vector_store
@@ -12,7 +12,7 @@ from backend.utils.helpers import build_agent_response, generate_id, safe_json_l
 from backend.utils.logger import get_logger, record_audit
 
 logger = get_logger("deal_intelligence_agent")
-client = OpenAI(api_key=settings.openai_api_key)
+client = get_llm_client()
 
 
 @retry(stop=stop_after_attempt(settings.max_retries + 1), wait=wait_exponential(min=1, max=4))

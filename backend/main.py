@@ -30,7 +30,9 @@ async def lifespan(app: FastAPI):
     logger.info(
         "revops_ai_startup",
         environment=settings.environment,
+        llm_provider=settings.llm_provider,
         model=settings.openai_model,
+        embedding_model=settings.openai_embedding_model,
         has_openai_key=settings.has_openai_key,
         mock_email=settings.is_mock_email,
     )
@@ -112,6 +114,8 @@ async def health_check():
         "version": "1.0.0",
         "environment": settings.environment,
         "timestamp": now_iso(),
+        "llm_provider": settings.llm_provider,
+        "llm_model": settings.openai_model,
         "openai_configured": settings.has_openai_key,
         "email_mode": "live" if not settings.is_mock_email else "mock",
         "vector_store": store.stats(),

@@ -6,6 +6,7 @@ from datetime import datetime
 import numpy as np
 
 from backend.config.settings import settings
+from backend.llm.client import get_llm_client
 from backend.utils.logger import get_logger
 
 logger = get_logger("vector_store")
@@ -16,11 +17,7 @@ try:
 except ImportError:
     FAISS_AVAILABLE = False
 
-try:
-    from openai import OpenAI as _OpenAI
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
+OPENAI_AVAILABLE = True
 
 
 class VectorMemoryStore:
@@ -41,7 +38,7 @@ class VectorMemoryStore:
 
         if OPENAI_AVAILABLE and settings.has_openai_key:
             try:
-                self._openai_client = _OpenAI(api_key=settings.openai_api_key)
+                self._openai_client = get_llm_client()
                 logger.info("embedding_client_ready")
             except Exception as e:
                 logger.warning("embedding_client_failed", error=str(e))
@@ -51,7 +48,7 @@ class VectorMemoryStore:
         if self._openai_client:
             try:
                 response = self._openai_client.embeddings.create(
-                    model="text-embedding-3-small",
+                    model=settings.openai_embedding_model,
                     input=text[:8000],   
                 )
                 return np.array(response.data[0].embedding, dtype=np.float32)

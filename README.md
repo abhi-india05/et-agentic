@@ -49,7 +49,7 @@ DIGITAL TWIN  CRM AUDITOR   ACTION AGENT
 ```bash
 cd revops-ai
 cp .env.example .env
-# Edit .env and add your OPENAI_API_KEY
+# Edit .env and add your GEMINI_API_KEY (or OPENAI_API_KEY)
 ```
 
 ### 2. Backend
@@ -74,12 +74,17 @@ npm run dev
 ## Environment Variables
 
 ```env
-OPENAI_API_KEY=sk-...          # Required — OpenAI API key (GPT-4o)
+OPENAI_API_KEY=                # Optional if using OpenAI provider
+GEMINI_API_KEY=AIza...         # Required for Gemini provider
+LLM_PROVIDER=gemini            # gemini | openai
+OPENAI_BASE_URL=               # Optional override
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
 MONGODB_URI=mongodb://...      # Optional — defaults to local MongoDB
 MAIL_USERNAME=you@gmail.com    # Optional — enables live email if set
 MAIL_PASSWORD=app-password     # Optional — Gmail App Password recommended
 MAIL_FROM=you@gmail.com        # Optional — sender address (usually same as username)
-OPENAI_MODEL=gpt-4o            # Model to use
+OPENAI_MODEL=gemini-1.5-pro    # Model to use
+OPENAI_EMBEDDING_MODEL=text-embedding-004
 ENVIRONMENT=development        # development | production
 ```
 
@@ -147,7 +152,7 @@ All agents return:
 | Layer | Technology |
 |-------|-----------|
 | Agent Framework | LangGraph |
-| LLM | OpenAI GPT-4o |
+| LLM | Gemini 1.5 Pro (OpenAI-compatible API) |
 | Backend | FastAPI + Python |
 | Database | MongoDB (CRM simulation) |
 | Vector Memory | FAISS |

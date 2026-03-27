@@ -4,6 +4,7 @@ from typing import Any, Dict, List
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from backend.config.settings import settings
+from backend.llm.client import get_llm_client
 from backend.memory.vector_store import get_vector_store
 from backend.utils.helpers import build_agent_response, generate_id, safe_json_loads, extract_json_from_text
 from backend.utils.logger import get_logger, record_audit
@@ -12,8 +13,7 @@ logger = get_logger("outreach_agent")
 
 
 def _get_openai_client():
-    from openai import OpenAI
-    return OpenAI(api_key=settings.openai_api_key)
+    return get_llm_client()
 
 
 @retry(

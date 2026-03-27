@@ -1,16 +1,16 @@
 import json
 from typing import Any, Dict, List
 
-from openai import OpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from backend.config.settings import settings
+from backend.llm.client import get_llm_client
 from backend.tools.crm_tool import get_all_accounts, get_pipeline_stats
 from backend.utils.helpers import build_agent_response, generate_id, safe_json_loads, days_since
 from backend.utils.logger import get_logger, record_audit
 
 logger = get_logger("crm_auditor_agent")
-client = OpenAI(api_key=settings.openai_api_key)
+client = get_llm_client()
 
 STUCK_STAGE_THRESHOLDS = {
     "Discovery": 21,

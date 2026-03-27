@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from backend.config.settings import settings
+from backend.llm.client import get_llm_client
 from backend.tools.crm_tool import get_all_accounts, get_all_usage_data
 from backend.utils.helpers import build_agent_response, safe_json_loads
 from backend.utils.logger import get_logger, record_audit
@@ -12,8 +13,7 @@ logger = get_logger("churn_agent")
 
 
 def _get_openai_client():
-    from openai import OpenAI
-    return OpenAI(api_key=settings.openai_api_key)
+    return get_llm_client()
 
 
 def compute_churn_score(account: Dict, usage: Dict) -> float:
