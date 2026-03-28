@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { Toaster } from 'react-hot-toast'
 import { AuthProvider, useAuth } from './context/AuthContext.jsx'
 import ProtectedRoute from './components/ProtectedRoute.jsx'
 import Sidebar from './components/Sidebar.jsx'
@@ -139,10 +140,34 @@ function AppShell({ children }) {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <AppRoutes />
-      </AuthProvider>
-    </BrowserRouter>
+    <>
+      <Toaster 
+        position="top-right"
+        toastOptions={{
+          style: {
+            background: '#18181b', // zinc-900
+            color: '#fff',
+            border: '1px solid #27272a', // zinc-800
+          },
+          success: {
+            iconTheme: {
+              primary: '#10b981', // emerald-500
+              secondary: '#fff',
+            },
+          },
+          error: {
+            iconTheme: {
+              primary: '#ef4444', // red-500
+              secondary: '#fff',
+            },
+          },
+        }}
+      />
+      <BrowserRouter>
+        <AuthProvider>
+          <AppRoutes />
+        </AuthProvider>
+      </BrowserRouter>
+    </>
   )
 }

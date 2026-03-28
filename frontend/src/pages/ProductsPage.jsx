@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
+import toast from 'react-hot-toast'
 import { PackagePlus, Boxes, Search, X, Trash2 } from 'lucide-react'
 import { api } from '../services/api.js'
 import {
@@ -75,6 +76,7 @@ export default function ProductsPage() {
       })
       setForm({ name: '', description: '' })
       await load(1)
+      toast.success('Product created successfully')
     } catch (e) {
       setFormError(e.message || 'Failed to create product')
     } finally {
@@ -89,6 +91,7 @@ export default function ProductsPage() {
       await api.deleteProduct(deleteTarget.product_id)
       setDeleteTarget(null)
       await load(page)
+      toast.success('Product deleted successfully')
     } catch (e) {
       setError(e.message || 'Failed to delete product')
       setDeleteTarget(null)

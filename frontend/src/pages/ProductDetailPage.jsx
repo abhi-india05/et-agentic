@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
+import toast from 'react-hot-toast'
 import { ArrowLeft, Save, Trash2, Clock, User as UserIcon } from 'lucide-react'
 import { api } from '../services/api.js'
 import { LoadingState, ErrorState, SectionHeader, Modal, Button } from '../components/UI.jsx'
@@ -52,6 +53,7 @@ export default function ProductDetailPage() {
       setProduct(updated)
       setForm({ name: updated.name || '', description: updated.description || '' })
       setSaveMsg('Saved successfully')
+      toast.success('Product updated successfully')
       setTimeout(() => setSaveMsg(''), 3000)
     } catch (e) {
       setError(e.message || 'Failed to update product')
@@ -64,6 +66,7 @@ export default function ProductDetailPage() {
     setDeleting(true)
     try {
       await api.deleteProduct(productId)
+      toast.success('Product deleted')
       navigate('/products', { replace: true })
     } catch (e) {
       setError(e.message || 'Failed to delete product')

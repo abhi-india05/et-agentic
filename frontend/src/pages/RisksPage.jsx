@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { AlertTriangle, TrendingDown, Clock, Zap } from 'lucide-react'
+import toast from 'react-hot-toast'
 import { SectionHeader, LoadingState, ErrorState, RiskBadge, ConfidenceBar, StatCard } from '../components/UI.jsx'
 import AgentFlow from '../components/AgentFlow.jsx'
 import { api } from '../services/api.js'
@@ -96,6 +97,7 @@ export default function RisksPage() {
     try {
       const res = await api.detectRisk(form)
       setResult(res)
+      toast.success('Risk detection completed')
     } catch (e) {
       setError(e.message)
     } finally {

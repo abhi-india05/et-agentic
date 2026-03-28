@@ -8,6 +8,8 @@
  *  - Consistent error parsing
  */
 
+import toast from 'react-hot-toast'
+
 const BASE = '/api'
 
 let inMemoryToken = ''
@@ -50,6 +52,7 @@ async function request(path, options = {}) {
     const msg = typeof err.detail === 'string'
       ? err.detail
       : err.message || `HTTP ${res.status}`
+    toast.error(msg)
     throw new Error(msg)
   }
 
@@ -86,6 +89,7 @@ async function requestWithPagination(path, options = {}) {
     const msg = typeof err.detail === 'string'
       ? err.detail
       : err.message || `HTTP ${res.status}`
+    toast.error(msg)
     throw new Error(msg)
   }
 

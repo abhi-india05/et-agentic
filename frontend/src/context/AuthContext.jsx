@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
+import toast from 'react-hot-toast'
 import { api, setAuthToken } from '../services/api.js'
 
 const AuthContext = createContext(null)
@@ -48,6 +49,7 @@ export function AuthProvider({ children }) {
     const me = await api.me()
     setUser(me)
     setIsAuthed(true)
+    toast.success('Logged in successfully')
     return res
   }, [])
 
@@ -58,6 +60,7 @@ export function AuthProvider({ children }) {
     const me = await api.me()
     setUser(me)
     setIsAuthed(true)
+    toast.success('Registration successful')
     return res
   }, [])
 
@@ -71,6 +74,7 @@ export function AuthProvider({ children }) {
       setAuthToken('')
       setUser(null)
       setIsAuthed(false)
+      toast.success('Logged out successfully')
     }
   }, [])
 

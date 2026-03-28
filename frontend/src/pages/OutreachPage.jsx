@@ -1,5 +1,6 @@
 import { ChevronDown, ChevronUp, ExternalLink, Mail, User, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import toast from 'react-hot-toast'
 import AgentFlow from '../components/AgentFlow.jsx'
 import { AgentTag, ErrorState, LoadingState, SectionHeader } from '../components/UI.jsx'
 import { api } from '../services/api.js'
@@ -155,8 +156,16 @@ export default function OutreachPage() {
     setError(null)
     setSendSummary(null)
     try {
-      const res = await api.runOutreach(form)
+      const payload = { ...form }
+      if (payload.website && !payload.website.startsWith('http')) {
+        payload.website = 'https://' + payload.website
+      }
+      Object.keys(payload).forEach(k => {
+        if (payload[k] === '') payload[k] = null
+      })
+      const res = await api.runOutreach(payload)
       setResult(res)
+      toast.success('Outreach campaign launched successfully')
     } catch (e) {
       setError(e.message)
     } finally {
@@ -230,6 +239,7 @@ export default function OutreachPage() {
       }
       const res = await api.sendSequences(payload)
       setSendSummary(res.summary || null)
+      toast.success('Sequences sent successfully')
     } catch (e) {
       setError(e.message)
     } finally {

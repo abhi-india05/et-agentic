@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { TrendingDown, DollarSign, AlertCircle, Shield } from 'lucide-react'
+import toast from 'react-hot-toast'
 import { SectionHeader, LoadingState, ErrorState, RiskBadge, ConfidenceBar, StatCard } from '../components/UI.jsx'
 import AgentFlow from '../components/AgentFlow.jsx'
 import { RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer, Tooltip } from 'recharts'
@@ -97,6 +98,7 @@ export default function ChurnPage() {
     try {
       const res = await api.predictChurn({ top_n: topN })
       setResult(res)
+      toast.success('Churn prediction completed')
     } catch (e) {
       setError(e.message)
     } finally {
