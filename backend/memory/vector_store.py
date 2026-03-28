@@ -271,11 +271,17 @@ class VectorMemoryStore:
             if FAISS_AVAILABLE:
                 self.index = faiss.IndexFlatL2(self.dimension)
 
-    def clear(self) -> None:
-        self.documents = []
-        if FAISS_AVAILABLE:
-            self.index = faiss.IndexFlatL2(self.dimension)
-        logger.info("vector_store_cleared")
+    def clear(self, namespace: Optional[str] = None) -> None:
+        """Clear all documents, or only those in a specific namespace."""
+        if namespace:
+            self.documents = [d for d in self.documents if d.get("namespace") != namespace]
+            self._rebuild_index()
+            logger.info("vector_store_namespace_cleared", namespace=namespace)
+        else:
+            self.documents = []
+            if FAISS_AVAILABLE:
+                self.index = faiss.IndexFlatL2(self.dimension)
+            logger.info("vector_store_cleared")
 
     def stats(self) -> Dict[str, Any]:
         namespaces: Dict[str, int] = {}

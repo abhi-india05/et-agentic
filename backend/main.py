@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -91,7 +92,7 @@ def _error_payload(*, request_id: str, code: str, message: str, details: Any = N
         "error": {
             "code": code,
             "message": message,
-            "details": details,
+            "details": jsonable_encoder(details),
             "request_id": request_id,
             "timestamp": now_iso(),
         }
@@ -381,7 +382,7 @@ async def api_error_handler(request: Request, exc: APIError) -> JSONResponse:
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     return _error_response(
         request_id=getattr(request.state, "request_id", generate_request_id()),
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         code="validation_error",
         message="Request validation failed",
         details=exc.errors(),
@@ -392,7 +393,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 async def password_validation_handler(request: Request, exc: PasswordValidationError) -> JSONResponse:
     return _error_response(
         request_id=getattr(request.state, "request_id", generate_request_id()),
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         code="weak_password",
         message=str(exc),
     )

@@ -6,16 +6,14 @@ from typing import Optional
 
 from jose import JWTError
 
-from backend.auth.jwt import (
-    TOKEN_TYPE_REFRESH,
-    create_access_token,
-    create_refresh_token,
-    decode_token,
-)
+from backend.auth.jwt import TOKEN_TYPE_REFRESH, create_access_token, create_refresh_token, decode_token
 from backend.config.settings import settings
 from backend.repositories.refresh_tokens import RefreshTokenRecord, RefreshTokenRepository
 from backend.repositories.users import UserInDB, UserRepository
 from backend.utils.helpers import generate_session_id, hash_token, utcnow
+from backend.utils.logger import get_logger
+
+logger = get_logger("auth_service")
 
 
 class AuthServiceError(Exception):
@@ -117,10 +115,12 @@ async def rotate_refresh_token(
 
     if record.token_hash != hash_token(refresh_token):
         await refresh_repo.revoke_family(family_id=family_id)
+        logger.warning("refresh_reuse_attack", token_id=token_id, family_id=family_id)
         raise RefreshTokenReuseError("Refresh token hash mismatch detected")
 
     if record.revoked_at is not None or record.rotated_at is not None or record.replaced_by_token_id:
         await refresh_repo.revoke_family(family_id=family_id)
+        logger.warning("refresh_reuse_attack", token_id=token_id, family_id=family_id)
         raise RefreshTokenReuseError("Refresh token reuse detected")
 
     if record.expires_at <= utcnow():
