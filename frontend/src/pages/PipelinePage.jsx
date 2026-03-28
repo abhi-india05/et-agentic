@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Activity, RefreshCw, TrendingUp } from 'lucide-react'
 import { SectionHeader, LoadingState, ErrorState, RiskBadge, StatCard } from '../components/UI.jsx'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts'
-import { api } from '../utils/api.js'
+import { api } from '../services/api.js'
 import { fmt } from '../utils/fmt.js'
 
 const STAGE_COLORS = {

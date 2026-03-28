@@ -59,6 +59,17 @@
     hover:border-accent hover:text-accent transition-all duration-150 cursor-pointer;
   }
 
+  .btn-danger {
+    @apply bg-danger text-white font-display font-semibold text-sm px-5 py-2.5 rounded-lg
+    hover:brightness-110 active:scale-95 transition-all duration-150 cursor-pointer;
+  }
+
+  .modal-backdrop {
+    @apply fixed inset-0 z-[100] flex items-center justify-center;
+    background: rgba(8, 11, 20, 0.85);
+    backdrop-filter: blur(4px);
+  }
+
   .badge {
     @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-mono font-medium;
   }

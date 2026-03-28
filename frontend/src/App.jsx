@@ -1,5 +1,6 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { AuthProvider, useAuth } from './context/AuthContext.jsx'
+import ProtectedRoute from './components/ProtectedRoute.jsx'
 import Sidebar from './components/Sidebar.jsx'
 import Overview from './pages/Overview.jsx'
 import OutreachPage from './pages/OutreachPage.jsx'
@@ -11,67 +12,137 @@ import LogsPage from './pages/LogsPage.jsx'
 import ProductsPage from './pages/ProductsPage.jsx'
 import ProductDetailPage from './pages/ProductDetailPage.jsx'
 import LoginPage from './pages/LoginPage.jsx'
-import { api, setAuthToken } from './utils/api.js'
 
-export default function App() {
-  const [isAuthed, setIsAuthed] = useState(false)
-  const [authChecked, setAuthChecked] = useState(false)
+function AppRoutes() {
+  const { isAuthed, authChecked } = useAuth()
 
-  useEffect(() => {
-    const onExpired = () => setIsAuthed(false)
-    window.addEventListener('auth:expired', onExpired)
-    return () => window.removeEventListener('auth:expired', onExpired)
-  }, [])
-
-  useEffect(() => {
-    let cancelled = false
-    api.me()
-      .then(() => {
-        if (!cancelled) setIsAuthed(true)
-      })
-      .catch(() => {
-        if (!cancelled) setIsAuthed(false)
-      })
-      .finally(() => {
-        if (!cancelled) setAuthChecked(true)
-      })
-    return () => { cancelled = true }
-  }, [])
-
-  if (!authChecked) {
-    return null
-  }
-
-  if (!isAuthed) {
-    return <LoginPage onLogin={() => setIsAuthed(true)} />
-  }
+  if (!authChecked) return null
 
   return (
+    <Routes>
+      {/* Public route */}
+      <Route
+        path="/login"
+        element={isAuthed ? <Navigate to="/" replace /> : <LoginPage />}
+      />
+
+      {/* Protected routes — all require auth */}
+      <Route
+        path="/"
+        element={
+          <ProtectedRoute>
+            <AppShell>
+              <Overview />
+            </AppShell>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/outreach"
+        element={
+          <ProtectedRoute>
+            <AppShell>
+              <OutreachPage />
+            </AppShell>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/risks"
+        element={
+          <ProtectedRoute>
+            <AppShell>
+              <RisksPage />
+            </AppShell>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/churn"
+        element={
+          <ProtectedRoute>
+            <AppShell>
+              <ChurnPage />
+            </AppShell>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/pipeline"
+        element={
+          <ProtectedRoute>
+            <AppShell>
+              <PipelinePage />
+            </AppShell>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/products"
+        element={
+          <ProtectedRoute>
+            <AppShell>
+              <ProductsPage />
+            </AppShell>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/products/:productId"
+        element={
+          <ProtectedRoute>
+            <AppShell>
+              <ProductDetailPage />
+            </AppShell>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/emails"
+        element={
+          <ProtectedRoute>
+            <AppShell>
+              <EmailsPage />
+            </AppShell>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/logs"
+        element={
+          <ProtectedRoute>
+            <AppShell>
+              <LogsPage />
+            </AppShell>
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Catch-all */}
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  )
+}
+
+function AppShell({ children }) {
+  return (
+    <div className="min-h-screen bg-void bg-grid">
+      <Sidebar />
+      <main className="ml-56 min-h-screen">
+        <div className="max-w-6xl mx-auto px-6 py-8">
+          {children}
+        </div>
+      </main>
+    </div>
+  )
+}
+
+export default function App() {
+  return (
     <BrowserRouter>
-      <div className="min-h-screen bg-void bg-grid">
-        <Sidebar onLogout={() => {
-          api.logout().catch(() => {})
-            .finally(() => {
-              setAuthToken('')
-              setIsAuthed(false)
-            })
-        }} />
-        <main className="ml-56 min-h-screen">
-          <div className="max-w-6xl mx-auto px-6 py-8">
-            <Routes>
-              <Route path="/" element={<Overview />} />
-              <Route path="/outreach" element={<OutreachPage />} />
-              <Route path="/risks" element={<RisksPage />} />
-              <Route path="/churn" element={<ChurnPage />} />
-              <Route path="/pipeline" element={<PipelinePage />} />
-              <Route path="/products" element={<ProductsPage />} />
-              <Route path="/products/:productId" element={<ProductDetailPage />} />
-              <Route path="/emails" element={<EmailsPage />} />
-              <Route path="/logs" element={<LogsPage />} />
-            </Routes>
-          </div>
-        </main>
-      </div>
+      <AuthProvider>
+        <AppRoutes />
+      </AuthProvider>
     </BrowserRouter>
   )
 }

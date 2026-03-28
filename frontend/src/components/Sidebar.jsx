@@ -3,6 +3,7 @@ import {
   LayoutDashboard, Zap, AlertTriangle, TrendingDown,
   ScrollText, Mail, Activity, Cpu, LogOut, Package
 } from 'lucide-react'
+import { useAuth } from '../context/AuthContext.jsx'
 
 const NAV = [
   { to: '/', icon: LayoutDashboard, label: 'Overview' },
@@ -15,7 +16,9 @@ const NAV = [
   { to: '/logs', icon: ScrollText, label: 'Audit Logs' },
 ]
 
-export default function Sidebar({ onLogout }) {
+export default function Sidebar() {
+  const { logout, user } = useAuth()
+
   return (
     <aside className="fixed left-0 top-0 h-screen w-56 bg-surface border-r border-border flex flex-col z-50">
       <div className="px-5 py-5 border-b border-border">
@@ -51,13 +54,18 @@ export default function Sidebar({ onLogout }) {
       </nav>
 
       <div className="px-4 py-4 border-t border-border">
+        {user && (
+          <div className="text-xs text-muted font-mono mb-2 truncate">
+            Signed in as <span className="text-text">{user.username}</span>
+          </div>
+        )}
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-success animate-pulse-slow" />
             <span className="text-xs text-muted font-mono">All agents online</span>
           </div>
           <button
-            onClick={onLogout}
+            onClick={logout}
             className="text-xs text-muted hover:text-text flex items-center gap-1"
             title="Log out"
           >
@@ -69,3 +77,4 @@ export default function Sidebar({ onLogout }) {
     </aside>
   )
 }
+

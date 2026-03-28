@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Mail, CheckCircle, XCircle, RefreshCw } from 'lucide-react'
 import { SectionHeader, LoadingState, ErrorState, StatCard } from '../components/UI.jsx'
-import { api } from '../utils/api.js'
+import { api } from '../services/api.js'
 import { fmt } from '../utils/fmt.js'
 
 export default function EmailsPage() {

@@ -2,7 +2,7 @@ import { ChevronDown, ChevronUp, ExternalLink, Mail, User, Zap } from 'lucide-re
 import { useEffect, useState } from 'react'
 import AgentFlow from '../components/AgentFlow.jsx'
 import { AgentTag, ErrorState, LoadingState, SectionHeader } from '../components/UI.jsx'
-import { api } from '../utils/api.js'
+import { api } from '../services/api.js'
 import { fmt } from '../utils/fmt.js'
 
 const INDUSTRIES = ['SaaS', 'Healthcare', 'Finance', 'Logistics', 'Retail', 'Manufacturing', 'CleanTech', 'AI/ML', 'Cybersecurity', 'EdTech']

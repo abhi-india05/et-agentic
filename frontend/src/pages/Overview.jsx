@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Activity, AlertTriangle, TrendingDown, Zap, DollarSign, Mail, CheckCircle, Clock } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { StatCard, LoadingState, ErrorState, SectionHeader } from '../components/UI.jsx'
-import { api } from '../utils/api.js'
+import { api } from '../services/api.js'
 import { fmt } from '../utils/fmt.js'
 
 const STAGE_COLORS = {

@@ -1,8 +1,11 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Lock, LogIn, User } from 'lucide-react'
-import { api, setAuthToken } from '../utils/api.js'
+import { useAuth } from '../context/AuthContext.jsx'
 
-export default function LoginPage({ onLogin }) {
+export default function LoginPage() {
+  const navigate = useNavigate()
+  const { login, register: authRegister } = useAuth()
   const [form, setForm] = useState({ username: '', password: '' })
   const [mode, setMode] = useState('login') // 'login' | 'register'
   const [loading, setLoading] = useState(false)
@@ -17,11 +20,14 @@ export default function LoginPage({ onLogin }) {
     setLoading(true)
     setError('')
     try {
-      const res = mode === 'register' ? await api.register(form) : await api.login(form)
-      setAuthToken(res.access_token)
-      onLogin?.()
+      if (mode === 'register') {
+        await authRegister(form)
+      } else {
+        await login(form)
+      }
+      navigate('/', { replace: true })
     } catch (err) {
-      setError(err.message || 'Login failed')
+      setError(err.message || 'Authentication failed')
     } finally {
       setLoading(false)
     }
@@ -77,14 +83,14 @@ export default function LoginPage({ onLogin }) {
           >
             <LogIn className="w-4 h-4" />
             {loading
-              ? (mode === 'register' ? 'Creating account...' : 'Signing in...')
+              ? (mode === 'register' ? 'Creating account…' : 'Signing in…')
               : (mode === 'register' ? 'Create account' : 'Sign in')}
           </button>
 
           <button
             type="button"
             disabled={loading}
-            onClick={() => setMode(mode === 'register' ? 'login' : 'register')}
+            onClick={() => { setMode(mode === 'register' ? 'login' : 'register'); setError('') }}
             className="w-full text-xs text-muted font-mono hover:text-text transition"
           >
             {mode === 'register'

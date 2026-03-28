@@ -3,7 +3,7 @@ import { TrendingDown, DollarSign, AlertCircle, Shield } from 'lucide-react'
 import { SectionHeader, LoadingState, ErrorState, RiskBadge, ConfidenceBar, StatCard } from '../components/UI.jsx'
 import AgentFlow from '../components/AgentFlow.jsx'
 import { RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer, Tooltip } from 'recharts'
-import { api } from '../utils/api.js'
+import { api } from '../services/api.js'
 import { fmt } from '../utils/fmt.js'
 
 function ChurnCard({ risk, rank }) {

@@ -129,3 +129,129 @@ export function JsonViewer({ data }) {
     </pre>
   )
 }
+
+/* ─── Modal ───────────────────────────────────────────────────────────── */
+
+export function Modal({ open, onClose, title, children, footer }) {
+  if (!open) return null
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="card w-full max-w-md mx-4 animate-fade-up relative"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-display font-700 text-text">{title}</h3>
+          <button
+            onClick={onClose}
+            className="text-muted hover:text-text text-lg leading-none transition"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="text-sm text-text-dim">{children}</div>
+
+        {footer && (
+          <div className="flex items-center justify-end gap-3 mt-5 pt-4 border-t border-border">
+            {footer}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/* ─── PaginationControls ──────────────────────────────────────────────── */
+
+export function PaginationControls({ page, pageSize, total, onPageChange }) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+
+  return (
+    <div className="flex items-center justify-between pt-4 border-t border-border/40 mt-4">
+      <span className="text-xs text-muted font-mono">
+        {total} total · page {page} of {totalPages}
+      </span>
+      <div className="flex items-center gap-2">
+        <button
+          className="btn-ghost text-xs disabled:opacity-30 disabled:cursor-not-allowed"
+          disabled={page <= 1}
+          onClick={() => onPageChange(page - 1)}
+        >
+          ← Prev
+        </button>
+        <button
+          className="btn-ghost text-xs disabled:opacity-30 disabled:cursor-not-allowed"
+          disabled={page >= totalPages}
+          onClick={() => onPageChange(page + 1)}
+        >
+          Next →
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/* ─── FormInput ───────────────────────────────────────────────────────── */
+
+export function FormInput({ label, value, onChange, type = 'text', placeholder, maxLength, required, disabled, icon: Icon }) {
+  return (
+    <label className="block">
+      {label && <span className="text-xs text-muted font-mono block mb-1.5">{label}</span>}
+      <div className="relative">
+        {Icon && <Icon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted" />}
+        <input
+          type={type}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          maxLength={maxLength}
+          required={required}
+          disabled={disabled}
+          className={`w-full bg-void border border-border rounded-lg ${Icon ? 'pl-9' : 'px-3'} pr-3 py-2.5 text-sm text-text focus:border-accent focus:outline-none disabled:opacity-50 transition`}
+        />
+      </div>
+    </label>
+  )
+}
+
+/* ─── TextArea ────────────────────────────────────────────────────────── */
+
+export function TextArea({ label, value, onChange, placeholder, maxLength, rows = 3, disabled }) {
+  return (
+    <label className="block">
+      {label && <span className="text-xs text-muted font-mono block mb-1.5">{label}</span>}
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        maxLength={maxLength}
+        rows={rows}
+        disabled={disabled}
+        className="w-full bg-void border border-border rounded-lg px-3 py-2.5 text-sm text-text focus:border-accent focus:outline-none min-h-[44px] disabled:opacity-50 transition"
+      />
+    </label>
+  )
+}
+
+/* ─── Button ──────────────────────────────────────────────────────────── */
+
+export function Button({ children, variant = 'primary', onClick, type = 'button', disabled, className = '' }) {
+  const variants = {
+    primary: 'btn-primary',
+    ghost: 'btn-ghost',
+    danger: 'btn-danger',
+  }
+  return (
+    <button
+      type={type}
+      onClick={onClick}
+      disabled={disabled}
+      className={`${variants[variant] || variants.primary} disabled:opacity-50 ${className}`}
+    >
+      {children}
+    </button>
+  )
+}
