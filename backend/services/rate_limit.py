@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from collections import defaultdict, deque
 from dataclasses import dataclass
@@ -32,9 +32,14 @@ class InMemoryRateLimiter:
             remaining = max(0, limit - len(bucket))
             return RateLimitResult(allowed=True, remaining=remaining, retry_after_seconds=0)
 
+    def reset(self) -> None:
+        with self._lock:
+            self._buckets.clear()
+
 
 _rate_limiter = InMemoryRateLimiter()
 
 
 def get_rate_limiter() -> InMemoryRateLimiter:
     return _rate_limiter
+

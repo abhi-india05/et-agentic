@@ -1,1 +1,1 @@
-﻿"""Service layer utilities for runtime concerns."""
+"""Service layer — business logic and runtime concerns."""
