@@ -9,6 +9,8 @@ from tenacity import retry as tenacity_retry
 from backend.agents.guardrails import parse_llm_json
 from backend.config.settings import settings
 from backend.llm.client import get_llm_client
+from pydantic import Field
+
 from backend.models.schemas import StrictBaseModel
 from backend.tools.crm_tool import get_all_accounts, get_pipeline_stats
 from backend.utils.helpers import build_agent_response, days_since
@@ -27,9 +29,9 @@ STUCK_STAGE_THRESHOLDS = {
 class CRMAuditRecommendation(StrictBaseModel):
     audit_score: int
     health_rating: str
-    top_priorities: List[Dict[str, Any]] = []
-    process_gaps: List[str] = []
-    immediate_actions: List[str] = []
+    top_priorities: List[Dict[str, Any]] = Field(default_factory=list)
+    process_gaps: List[str] = Field(default_factory=list)
+    immediate_actions: List[str] = Field(default_factory=list)
     revenue_recovery_potential: float = 0.0
     recommendations_summary: str
 

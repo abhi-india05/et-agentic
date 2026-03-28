@@ -178,6 +178,7 @@ def query_audit_logs(
     page: int = 1,
     page_size: int = 100,
 ) -> Dict[str, Any]:
+    global _audit_backend_disabled
     if not _audit_backend_disabled and not settings.is_test:
         try:
             from backend.db.mongo import get_sync_database
@@ -197,7 +198,7 @@ def query_audit_logs(
             )
             return {"items": list(cursor), "total": total}
         except Exception:
-            pass
+            _audit_backend_disabled = True
     return _query_logs_from_memory(session_id, user_id, page, page_size)
 
 

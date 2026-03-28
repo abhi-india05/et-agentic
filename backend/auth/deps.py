@@ -57,23 +57,14 @@ async def get_current_user(
     if not subject:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
 
-    # Try DB lookup first
     db_user = await user_repo.get_by_id(subject)
-    if db_user:
-        user = AuthUser(user_id=db_user.user_id, username=db_user.username, role=db_user.role)
-        request.state.user = user
-        bind_context(user_id=user.user_id, username=user.username, role=user.role)
-        return user
+    if not db_user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
-    # Fallback: env-based admin user (subject == auth_username from settings)
-    if subject == settings.auth_username:
-        role = str(payload.get("role", "admin"))
-        user = AuthUser(user_id=subject, username=subject, role=role)
-        request.state.user = user
-        bind_context(user_id=user.user_id, username=user.username, role=user.role)
-        return user
-
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    user = AuthUser(user_id=db_user.user_id, username=db_user.username, role=db_user.role)
+    request.state.user = user
+    bind_context(user_id=user.user_id, username=user.username, role=user.role)
+    return user
 
 
 def require_role(*allowed_roles: str) -> Callable[[AuthUser], AuthUser]:

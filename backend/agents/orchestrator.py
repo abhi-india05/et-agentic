@@ -279,6 +279,7 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
                 "top_n": input_data.get("top_n", 3),
                 "product_context": plan.product_context,
                 "session_id": session_id,
+                "user_id": user_id,
             },
             "Churn analysis failed.",
         )

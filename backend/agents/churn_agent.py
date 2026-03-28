@@ -6,9 +6,10 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from backend.config.settings import settings
 from backend.llm.client import get_llm_client
+from backend.memory.vector_store import get_vector_store
 from backend.models.schemas import ProductContext
 from backend.tools.crm_tool import get_all_accounts, get_all_usage_data
-from backend.utils.helpers import build_agent_response
+from backend.utils.helpers import build_agent_response, generate_id
 from backend.utils.logger import get_logger, record_audit
 
 logger = get_logger("churn_agent")
@@ -100,8 +101,11 @@ def run_churn_agent(
     top_n: int,
     product_context: ProductContext,
     session_id: str,
+    user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     logger.info("churn_agent_start", session_id=session_id)
+    memory = get_vector_store()
+    namespace = user_id or "global"
     accounts = get_all_accounts()
     usage_map = {row["account_id"]: row for row in get_all_usage_data()}
     if account_ids:
@@ -183,6 +187,12 @@ def run_churn_agent(
         confidence=0.87,
         agent_name="churn_agent",
         tools_used=["crm_tool", "llm"],
+    )
+    memory.add_document(
+        doc_id=generate_id("churn"),
+        content=f"Churn analysis completed for {len(active_accounts)} accounts with product context '{product_context.name or 'none'}'.",
+        metadata={"agent": "churn", "session_id": session_id, "user_id": user_id or ""},
+        namespace=namespace,
     )
     record_audit(
         session_id=session_id,
