@@ -1,7 +1,17 @@
+"""
+Vector memory store with FAISS backend and per-user namespace isolation.
+
+Supports:
+- Per-user namespace to prevent cross-user contamination
+- TTL-based document pruning
+- Max document limits per user and globally
+"""
+from __future__ import annotations
+
 import os
 import pickle
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from datetime import datetime
 
 import numpy as np
 
@@ -13,6 +23,7 @@ logger = get_logger("vector_store")
 
 try:
     import faiss
+
     FAISS_AVAILABLE = True
 except ImportError:
     FAISS_AVAILABLE = False
@@ -21,7 +32,7 @@ OPENAI_AVAILABLE = True
 
 
 class VectorMemoryStore:
-    def __init__(self, dimension: int = 1536, index_path: Optional[str] = None):
+    def __init__(self, dimension: int = 1536, index_path: Optional[str] = None) -> None:
         self.dimension = dimension
         self.index_path = index_path or settings.faiss_index_path
         self.documents: List[Dict[str, Any]] = []
@@ -49,7 +60,7 @@ class VectorMemoryStore:
             try:
                 response = self._openai_client.embeddings.create(
                     model=settings.openai_embedding_model,
-                    input=text[:8000],   
+                    input=text[:8000],
                 )
                 return np.array(response.data[0].embedding, dtype=np.float32)
             except Exception as e:
@@ -58,19 +69,48 @@ class VectorMemoryStore:
         rng = np.random.default_rng(abs(hash(text)) % (2**32))
         return rng.standard_normal(self.dimension).astype(np.float32)
 
+    # ------------------------------------------------------------------
+    # Namespace-aware document operations
+    # ------------------------------------------------------------------
+
     def add_document(
         self,
         doc_id: str,
         content: str,
         metadata: Optional[Dict[str, Any]] = None,
+        namespace: Optional[str] = None,
     ) -> bool:
+        """Add a document with optional namespace isolation.
+
+        Args:
+            doc_id: Unique identifier for the document.
+            content: Text content to embed and store.
+            metadata: Arbitrary metadata dict (company, agent, session, etc.).
+            namespace: User-level namespace for isolation (typically user_id).
+        """
         try:
+            # Enforce global document limit
+            if len(self.documents) >= settings.memory_max_total_documents:
+                self._prune_oldest(count=max(1, settings.memory_max_total_documents // 10))
+
+            # Enforce per-user limit if namespace provided
+            if namespace:
+                user_docs = [d for d in self.documents if d.get("namespace") == namespace]
+                if len(user_docs) >= settings.memory_max_documents_per_user:
+                    self._prune_oldest_for_namespace(
+                        namespace,
+                        count=max(1, settings.memory_max_documents_per_user // 10),
+                    )
+
             embedding = self._get_embedding(content)
-            doc = {
+            now = datetime.now(timezone.utc)
+            doc: Dict[str, Any] = {
                 "doc_id": doc_id,
                 "content": content,
                 "metadata": metadata or {},
-                "timestamp": datetime.utcnow().isoformat(),
+                "namespace": namespace or "global",
+                "timestamp": now.isoformat(),
+                "created_at_epoch": now.timestamp(),
                 "embedding_index": len(self.documents),
             }
             self.documents.append(doc)
@@ -88,7 +128,9 @@ class VectorMemoryStore:
         query: str,
         top_k: int = 5,
         filter_metadata: Optional[Dict[str, Any]] = None,
+        namespace: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
+        """Search documents, optionally scoped to a namespace."""
         if not self.documents:
             return []
 
@@ -96,42 +138,101 @@ class VectorMemoryStore:
             query_embedding = self._get_embedding(query)
 
             if self.index is not None and FAISS_AVAILABLE and self.index.ntotal > 0:
-                k = min(top_k, len(self.documents))
-                distances, indices = self.index.search(query_embedding.reshape(1, -1), k)
-                results = []
+                # Search more candidates than top_k so we can filter by namespace
+                search_k = min(top_k * 5, len(self.documents))
+                distances, indices = self.index.search(query_embedding.reshape(1, -1), search_k)
+                candidates = []
                 for dist, idx in zip(distances[0], indices[0]):
                     if 0 <= idx < len(self.documents):
                         doc = dict(self.documents[idx])
                         doc["similarity_score"] = float(1.0 / (1.0 + dist))
-                        results.append(doc)
+                        candidates.append(doc)
             else:
-                results = [dict(d) for d in self.documents[-top_k:]]
-                for r in results:
+                candidates = [dict(d) for d in self.documents[-top_k * 3 :]]
+                for r in candidates:
                     r["similarity_score"] = 0.5
 
+            # Filter by namespace
+            if namespace:
+                candidates = [r for r in candidates if r.get("namespace") in (namespace, "global")]
+
+            # Filter by metadata
             if filter_metadata:
-                results = [
-                    r for r in results
-                    if all(r["metadata"].get(k) == v for k, v in filter_metadata.items())
+                candidates = [
+                    r
+                    for r in candidates
+                    if all(r.get("metadata", {}).get(k) == v for k, v in filter_metadata.items())
                 ]
 
-            return results
+            return candidates[:top_k]
 
         except Exception as e:
             logger.error("search_failed", error=str(e))
             return []
 
-    def get_context_for_company(self, company: str) -> str:
-        results = self.search(company, top_k=3, filter_metadata={"company": company})
+    def get_context_for_company(
+        self,
+        company: str,
+        namespace: Optional[str] = None,
+    ) -> str:
+        results = self.search(company, top_k=3, filter_metadata={"company": company}, namespace=namespace)
         if not results:
-            results = self.search(company, top_k=3)
+            results = self.search(company, top_k=3, namespace=namespace)
 
         if not results:
             return "No prior context available."
 
-        return "\n".join(
-            f"[{r['timestamp'][:10]}] {r['content']}" for r in results
-        )
+        return "\n".join(f"[{r['timestamp'][:10]}] {r['content']}" for r in results)
+
+    # ------------------------------------------------------------------
+    # TTL & pruning
+    # ------------------------------------------------------------------
+
+    def prune_expired(self) -> int:
+        """Remove documents older than the configured TTL. Returns count removed."""
+        if not self.documents:
+            return 0
+        cutoff = datetime.now(timezone.utc).timestamp() - settings.memory_ttl_seconds
+        before = len(self.documents)
+        self.documents = [d for d in self.documents if d.get("created_at_epoch", 0) > cutoff]
+        removed = before - len(self.documents)
+        if removed > 0:
+            self._rebuild_index()
+            logger.info("memory_pruned_ttl", removed=removed)
+        return removed
+
+    def _prune_oldest(self, count: int) -> None:
+        """Remove the oldest `count` documents globally."""
+        self.documents = self.documents[count:]
+        self._rebuild_index()
+        logger.info("memory_pruned_global", removed=count)
+
+    def _prune_oldest_for_namespace(self, namespace: str, count: int) -> None:
+        """Remove the oldest `count` documents for a specific namespace."""
+        removed = 0
+        new_docs: List[Dict[str, Any]] = []
+        for doc in self.documents:
+            if doc.get("namespace") == namespace and removed < count:
+                removed += 1
+                continue
+            new_docs.append(doc)
+        self.documents = new_docs
+        self._rebuild_index()
+        logger.info("memory_pruned_namespace", namespace=namespace, removed=removed)
+
+    def _rebuild_index(self) -> None:
+        """Rebuild FAISS index from current documents."""
+        if not FAISS_AVAILABLE:
+            return
+        self.index = faiss.IndexFlatL2(self.dimension)
+        for doc in self.documents:
+            embedding = self._get_embedding(doc["content"])
+            self.index.add(embedding.reshape(1, -1))
+            doc["embedding_index"] = self.index.ntotal - 1
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
 
     def save(self) -> None:
         try:
@@ -177,12 +278,17 @@ class VectorMemoryStore:
         logger.info("vector_store_cleared")
 
     def stats(self) -> Dict[str, Any]:
+        namespaces: Dict[str, int] = {}
+        for doc in self.documents:
+            ns = doc.get("namespace", "global")
+            namespaces[ns] = namespaces.get(ns, 0) + 1
         return {
             "total_documents": len(self.documents),
             "faiss_available": FAISS_AVAILABLE,
             "dimension": self.dimension,
             "index_active": self.index is not None,
             "embedding_client": self._openai_client is not None,
+            "namespaces": namespaces,
         }
 
 

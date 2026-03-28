@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Callable, Optional
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError
 
-from backend.auth.jwt import decode_access_token
+from backend.auth.jwt import TOKEN_TYPE_ACCESS, decode_token
 from backend.config.settings import settings
 from backend.deps import get_user_repo
 from backend.repositories.users import UserRepository
+from backend.utils.logger import bind_context
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -19,16 +20,17 @@ _bearer = HTTPBearer(auto_error=False)
 class AuthUser:
     user_id: str
     username: str
-    is_admin: bool = False
+    role: str
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == "admin"
 
 
-def _extract_token(
-    request: Request, credentials: Optional[HTTPAuthorizationCredentials]
-) -> Optional[str]:
+def _extract_token(request: Request, credentials: Optional[HTTPAuthorizationCredentials]) -> Optional[str]:
     if credentials and (credentials.scheme or "").lower() == "bearer":
         return credentials.credentials
-    cookie_name = settings.auth_cookie_name
-    return request.cookies.get(cookie_name)
+    return request.cookies.get(settings.auth_cookie_name)
 
 
 async def get_current_user(
@@ -37,41 +39,49 @@ async def get_current_user(
     user_repo: UserRepository = Depends(get_user_repo),
 ) -> AuthUser:
     if not settings.auth_enabled:
-        user = AuthUser(user_id="anonymous", username="anonymous", is_admin=False)
+        user = AuthUser(user_id="anonymous", username="anonymous", role="user")
         request.state.user = user
+        bind_context(user_id=user.user_id, username=user.username, role=user.role)
         return user
 
     token = _extract_token(request, credentials)
     if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing or invalid authentication token",
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing authentication token")
 
     try:
-        payload = decode_access_token(token)
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Token verification failed")
+        payload = decode_token(token, expected_type=TOKEN_TYPE_ACCESS)
+    except JWTError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token verification failed") from exc
 
-    sub = payload.get("sub")
-    username = payload.get("username") or ""
-    role = payload.get("role") or ""
-    if not sub:
-        raise HTTPException(status_code=401, detail="Invalid token payload")
+    subject = str(payload.get("sub") or "").strip()
+    if not subject:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
 
-    if str(role).lower() == "admin" or str(sub) == settings.auth_username:
-        user = AuthUser(user_id=str(sub), username=username or settings.auth_username, is_admin=True)
+    # Try DB lookup first
+    db_user = await user_repo.get_by_id(subject)
+    if db_user:
+        user = AuthUser(user_id=db_user.user_id, username=db_user.username, role=db_user.role)
         request.state.user = user
+        bind_context(user_id=user.user_id, username=user.username, role=user.role)
         return user
 
-    db_user = await user_repo.get_by_id(str(sub))
-    if not db_user and username:
-        # Back-compat: older tokens used username in `sub`.
-        db_user = await user_repo.get_by_username(str(sub)) or await user_repo.get_by_username(username)
-    if not db_user:
-        raise HTTPException(status_code=401, detail="User not found")
+    # Fallback: env-based admin user (subject == auth_username from settings)
+    if subject == settings.auth_username:
+        role = str(payload.get("role", "admin"))
+        user = AuthUser(user_id=subject, username=subject, role=role)
+        request.state.user = user
+        bind_context(user_id=user.user_id, username=user.username, role=user.role)
+        return user
 
-    user = AuthUser(user_id=db_user.user_id, username=db_user.username, is_admin=False)
-    request.state.user = user
-    return user
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
+
+def require_role(*allowed_roles: str) -> Callable[[AuthUser], AuthUser]:
+    allowed = {role.strip().lower() for role in allowed_roles if role.strip()}
+
+    async def _dependency(user: AuthUser = Depends(get_current_user)) -> AuthUser:
+        if allowed and user.role.lower() not in allowed:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+        return user
+
+    return _dependency

@@ -20,3 +20,4 @@ tenacity
 structlog
 rich
 pytest
+pytest-asyncio

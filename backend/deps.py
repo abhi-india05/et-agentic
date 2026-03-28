@@ -1,9 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from functools import lru_cache
 
 from backend.db.mongo import get_database
 from backend.repositories.products import MongoProductRepository, ProductRepository
+from backend.repositories.refresh_tokens import MongoRefreshTokenRepository, RefreshTokenRepository
+from backend.repositories.sessions import MongoSessionRepository, SessionRepository
 from backend.repositories.users import MongoUserRepository, UserRepository
 
 
@@ -16,3 +18,12 @@ def get_user_repo() -> UserRepository:
 def get_product_repo() -> ProductRepository:
     return MongoProductRepository(get_database())
 
+
+@lru_cache(maxsize=1)
+def get_session_repo() -> SessionRepository:
+    return MongoSessionRepository(get_database())
+
+
+@lru_cache(maxsize=1)
+def get_refresh_token_repo() -> RefreshTokenRepository:
+    return MongoRefreshTokenRepository(get_database())

@@ -1,92 +1,196 @@
-from typing import List, Optional
+﻿from __future__ import annotations
 
-from pydantic import AnyUrl, Field
-from pydantic_settings import BaseSettings
+import json
+from typing import Optional
+from urllib.parse import urlparse
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # LLM configuration. We use the OpenAI client SDK for both native OpenAI
-    # and Gemini's OpenAI-compatible endpoint.
-    openai_api_key: str = Field("", env="OPENAI_API_KEY")
-    gemini_api_key: Optional[str] = Field(None, env="GEMINI_API_KEY")
-    llm_provider: str = Field("openai", env="LLM_PROVIDER")
-    openai_base_url: Optional[str] = Field(None, env="OPENAI_BASE_URL")
+    """Centralized runtime configuration with production validation."""
+
+    model_config = SettingsConfigDict(
+        env_file=(".env", "backend/.env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+        populate_by_name=True,
+    )
+
+    openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+    gemini_api_key: Optional[str] = Field(default=None, alias="GEMINI_API_KEY")
+    llm_provider: str = Field(default="openai", alias="LLM_PROVIDER")
+    openai_base_url: Optional[str] = Field(default=None, alias="OPENAI_BASE_URL")
     gemini_base_url: str = Field(
-        "https://generativelanguage.googleapis.com/v1beta/openai/",
-        env="GEMINI_BASE_URL",
+        default="https://generativelanguage.googleapis.com/v1beta/openai/",
+        alias="GEMINI_BASE_URL",
     )
-    mongodb_uri: AnyUrl = Field(..., env="MONGODB_URI")
+    openai_model: str = Field(default="gpt-4o", alias="OPENAI_MODEL")
+    openai_embedding_model: str = Field(
+        default="text-embedding-3-small",
+        alias="OPENAI_EMBEDDING_MODEL",
+    )
 
-    # Email (Gmail SMTP). If these aren't set, the app runs in mock-email mode.
-    # For Gmail, set MAIL_PASSWORD to an App Password (recommended) rather than your normal login.
-    mail_username: Optional[str] = Field(None, env="MAIL_USERNAME")
-    mail_password: Optional[str] = Field(None, env="MAIL_PASSWORD")
-    mail_from: Optional[str] = Field(None, env="MAIL_FROM")
-    mail_server: str = Field("smtp.gmail.com", env="MAIL_SERVER")
-    mail_port: int = Field(587, env="MAIL_PORT")
-    mail_tls: bool = Field(True, env="MAIL_TLS")
-    mail_ssl: bool = Field(False, env="MAIL_SSL")
+    mongodb_uri: str = Field(default="mongodb://localhost:27017/revops_ai", alias="MONGODB_URI")
+    mongo_server_selection_timeout_ms: int = Field(
+        default=1200,
+        ge=100,
+        le=10000,
+        alias="MONGO_SERVER_SELECTION_TIMEOUT_MS",
+    )
+    mongo_connect_timeout_ms: int = Field(
+        default=1200,
+        ge=100,
+        le=10000,
+        alias="MONGO_CONNECT_TIMEOUT_MS",
+    )
+    mongo_socket_timeout_ms: int = Field(
+        default=3000,
+        ge=500,
+        le=30000,
+        alias="MONGO_SOCKET_TIMEOUT_MS",
+    )
 
-    # Back-compat: older versions used SendGrid. We keep the setting optional so
-    # existing .env files don't break, but the codebase now prefers SMTP.
-    sendgrid_api_key: str = Field("mock_key", env="SENDGRID_API_KEY")
+    mail_username: Optional[str] = Field(default=None, alias="MAIL_USERNAME")
+    mail_password: Optional[str] = Field(default=None, alias="MAIL_PASSWORD")
+    mail_from: Optional[str] = Field(default=None, alias="MAIL_FROM")
+    mail_server: str = Field(default="smtp.gmail.com", alias="MAIL_SERVER")
+    mail_port: int = Field(default=587, ge=1, le=65535, alias="MAIL_PORT")
+    mail_tls: bool = Field(default=True, alias="MAIL_TLS")
+    mail_ssl: bool = Field(default=False, alias="MAIL_SSL")
+    sendgrid_api_key: str = Field(default="mock_key", alias="SENDGRID_API_KEY")
 
-    openai_model: str = Field("gpt-4o", env="OPENAI_MODEL")
-    openai_embedding_model: str = Field("text-embedding-3-small", env="OPENAI_EMBEDDING_MODEL")
-    environment: str = Field("development", env="ENVIRONMENT")
-    log_level: str = Field("INFO", env="LOG_LEVEL")
+    environment: str = Field(default="development", alias="ENVIRONMENT")
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     cors_origins: str = Field(
-        "http://localhost:5173,http://localhost:3000",
-        env="CORS_ORIGINS",
+        default="http://localhost:5173,http://localhost:3000",
+        alias="CORS_ORIGINS",
     )
-    max_retries: int = Field(2, env="MAX_RETRIES")
-    retry_delay: float = Field(1.0, env="RETRY_DELAY")
-    faiss_index_path: str = Field("./memory/faiss_index", env="FAISS_INDEX_PATH")
-    confidence_threshold: float = Field(0.6, env="CONFIDENCE_THRESHOLD")
+    max_retries: int = Field(default=2, ge=0, le=5, alias="MAX_RETRIES")
+    retry_delay: float = Field(default=1.0, ge=0.1, le=10.0, alias="RETRY_DELAY")
+    confidence_threshold: float = Field(default=0.6, ge=0.0, le=1.0, alias="CONFIDENCE_THRESHOLD")
+    faiss_index_path: str = Field(default="./memory/faiss_index", alias="FAISS_INDEX_PATH")
 
-    # API authentication
-    auth_enabled: bool = Field(True, env="AUTH_ENABLED")
-    auth_username: str = Field("admin", env="AUTH_USERNAME")
-    auth_password: str = Field("admin123", env="AUTH_PASSWORD")
-    auth_secret_key: str = Field("change-me", env="AUTH_SECRET_KEY")
-    auth_algorithm: str = Field("HS256", env="AUTH_ALGORITHM")
-    auth_token_expire_minutes: int = Field(480, env="AUTH_TOKEN_EXPIRE_MINUTES")
-    auth_cookie_name: str = Field("revops_access_token", env="AUTH_COOKIE_NAME")
-    auth_cookie_samesite: str = Field("lax", env="AUTH_COOKIE_SAMESITE")
-    auth_cookie_secure: Optional[bool] = Field(None, env="AUTH_COOKIE_SECURE")
-    auth_cookie_domain: Optional[str] = Field(None, env="AUTH_COOKIE_DOMAIN")
-    auth_password_min_length: int = Field(8, env="AUTH_PASSWORD_MIN_LENGTH")
+    auth_enabled: bool = Field(default=True, alias="AUTH_ENABLED")
+    auth_username: str = Field(default="admin", alias="AUTH_USERNAME")
+    auth_password: str = Field(default="ChangeMe-Admin#123", alias="AUTH_PASSWORD")
+    auth_secret_key: str = Field(default="change-me", alias="AUTH_SECRET_KEY")
+    auth_algorithm: str = Field(default="HS256", alias="AUTH_ALGORITHM")
+    auth_access_token_expire_minutes: int = Field(
+        default=15,
+        ge=15,
+        le=30,
+        alias="AUTH_ACCESS_TOKEN_EXPIRE_MINUTES",
+    )
+    auth_refresh_token_expire_days: int = Field(
+        default=14,
+        ge=7,
+        le=30,
+        alias="AUTH_REFRESH_TOKEN_EXPIRE_DAYS",
+    )
+    auth_cookie_name: str = Field(default="revops_access_token", alias="AUTH_COOKIE_NAME")
+    auth_refresh_cookie_name: str = Field(
+        default="revops_refresh_token",
+        alias="AUTH_REFRESH_COOKIE_NAME",
+    )
+    auth_cookie_samesite: str = Field(default="lax", alias="AUTH_COOKIE_SAMESITE")
+    auth_cookie_secure: Optional[bool] = Field(default=None, alias="AUTH_COOKIE_SECURE")
+    auth_cookie_domain: Optional[str] = Field(default=None, alias="AUTH_COOKIE_DOMAIN")
+    auth_password_min_length: int = Field(default=12, ge=10, le=128, alias="AUTH_PASSWORD_MIN_LENGTH")
+    auth_password_require_upper: bool = Field(default=True, alias="AUTH_PASSWORD_REQUIRE_UPPER")
+    auth_password_require_lower: bool = Field(default=True, alias="AUTH_PASSWORD_REQUIRE_LOWER")
+    auth_password_require_digit: bool = Field(default=True, alias="AUTH_PASSWORD_REQUIRE_DIGIT")
+    auth_password_require_special: bool = Field(default=True, alias="AUTH_PASSWORD_REQUIRE_SPECIAL")
+    auth_issuer: str = Field(default="revops-ai", alias="AUTH_ISSUER")
+    auth_audience: str = Field(default="revops-ai-api", alias="AUTH_AUDIENCE")
 
-    class Config:
-        # Support running from repo root or from /backend.
-        env_file = (".env", "backend/.env")
-        env_file_encoding = "utf-8"
+    global_rate_limit_requests_per_minute: int = Field(
+        default=120,
+        ge=10,
+        le=5000,
+        alias="GLOBAL_RATE_LIMIT_REQUESTS_PER_MINUTE",
+    )
+    login_rate_limit_attempts: int = Field(
+        default=5,
+        ge=1,
+        le=25,
+        alias="LOGIN_RATE_LIMIT_ATTEMPTS",
+    )
+    login_rate_limit_window_seconds: int = Field(
+        default=900,
+        ge=60,
+        le=86400,
+        alias="LOGIN_RATE_LIMIT_WINDOW_SECONDS",
+    )
+
+    default_page_size: int = Field(default=25, ge=1, le=200, alias="DEFAULT_PAGE_SIZE")
+    max_page_size: int = Field(default=100, ge=10, le=500, alias="MAX_PAGE_SIZE")
+
+    memory_ttl_seconds: int = Field(default=604800, ge=3600, alias="MEMORY_TTL_SECONDS")
+    memory_max_documents_per_user: int = Field(
+        default=200,
+        ge=10,
+        le=5000,
+        alias="MEMORY_MAX_DOCUMENTS_PER_USER",
+    )
+    memory_max_total_documents: int = Field(
+        default=5000,
+        ge=100,
+        le=50000,
+        alias="MEMORY_MAX_TOTAL_DOCUMENTS",
+    )
+
+    @field_validator("environment")
+    @classmethod
+    def _normalize_environment(cls, value: str) -> str:
+        return (value or "development").strip().lower()
+
+    @field_validator("log_level")
+    @classmethod
+    def _normalize_log_level(cls, value: str) -> str:
+        return (value or "INFO").strip().upper()
+
+    @field_validator("llm_provider")
+    @classmethod
+    def _normalize_provider(cls, value: str) -> str:
+        provider = (value or "openai").strip().lower()
+        if provider not in {"openai", "gemini"}:
+            raise ValueError("LLM_PROVIDER must be either 'openai' or 'gemini'")
+        return provider
 
     @property
-    def cors_origins_list(self) -> List[str]:
-        s = (self.cors_origins or "").strip()
-        if not s:
+    def is_production(self) -> bool:
+        return self.environment == "production"
+
+    @property
+    def is_test(self) -> bool:
+        return self.environment == "test"
+
+    @property
+    def database_name(self) -> str:
+        parsed = urlparse(self.mongodb_uri)
+        path = (parsed.path or "").lstrip("/")
+        return path or "revops_ai"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        raw = (self.cors_origins or "").strip()
+        if not raw:
             return []
-        if s.startswith("["):
-            # If someone provides JSON in env, be permissive.
-            import json
+        if raw.startswith("["):
             try:
-                v = json.loads(s)
-                if isinstance(v, list):
-                    return [str(x) for x in v]
-            except Exception:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    return [str(item).strip() for item in parsed if str(item).strip()]
+            except json.JSONDecodeError:
                 pass
-        return [p.strip() for p in s.split(",") if p.strip()]
-
-    @property
-    def has_openai_key(self) -> bool:
-        # Back-compat property name used across the existing codebase.
-        return bool(self.llm_api_key)
+        return [item.strip() for item in raw.split(",") if item.strip()]
 
     @property
     def llm_api_key(self) -> str:
-        provider = (self.llm_provider or "openai").strip().lower()
-        if provider == "gemini":
+        if self.llm_provider == "gemini":
             return (self.gemini_api_key or self.openai_api_key or "").strip()
         return (self.openai_api_key or "").strip()
 
@@ -94,25 +198,59 @@ class Settings(BaseSettings):
     def llm_base_url(self) -> Optional[str]:
         if self.openai_base_url:
             return self.openai_base_url.strip()
-        provider = (self.llm_provider or "openai").strip().lower()
-        if provider == "gemini":
+        if self.llm_provider == "gemini":
             return self.gemini_base_url.strip()
         return None
 
     @property
+    def has_openai_key(self) -> bool:
+        return bool(self.llm_api_key)
+
+    @property
     def is_mock_email(self) -> bool:
-       
         if not (self.mail_username and self.mail_password and self.mail_from):
             return True
-        placeholders = ("your_", "example.com", "changeme", "test", "dummy")
+        placeholders = ("your_", "example.com", "changeme", "dummy", "placeholder")
         joined = " ".join([self.mail_username, self.mail_password, self.mail_from]).lower()
-        return any(p in joined for p in placeholders)
+        return any(marker in joined for marker in placeholders)
 
     @property
     def resolved_auth_cookie_secure(self) -> bool:
         if self.auth_cookie_secure is not None:
             return bool(self.auth_cookie_secure)
-        return (self.environment or "").strip().lower() == "production"
+        return self.is_production
+
+    @property
+    def auth_access_token_expire_seconds(self) -> int:
+        return self.auth_access_token_expire_minutes * 60
+
+    @property
+    def auth_refresh_token_expire_seconds(self) -> int:
+        return self.auth_refresh_token_expire_days * 24 * 60 * 60
+
+    def validate_runtime(self) -> None:
+        problems: list[str] = []
+        if not self.mongodb_uri.strip():
+            problems.append("MONGODB_URI must be configured.")
+        if self.auth_enabled and self.is_production:
+            secret = self.auth_secret_key.strip()
+            if secret in {"", "change-me", "changeme", "change-me-please-use-a-long-random-string"}:
+                problems.append("AUTH_SECRET_KEY must be replaced with a strong random secret.")
+            if len(secret) < 32:
+                problems.append("AUTH_SECRET_KEY must be at least 32 characters long.")
+            if not self.auth_issuer.strip():
+                problems.append("AUTH_ISSUER must be configured.")
+            if not self.auth_audience.strip():
+                problems.append("AUTH_AUDIENCE must be configured.")
+        if self.is_production:
+            if not self.llm_api_key:
+                problems.append("An LLM API key is required in production.")
+            if not self.cors_origins_list:
+                problems.append("CORS_ORIGINS must be configured in production.")
+            if not self.resolved_auth_cookie_secure:
+                problems.append("AUTH_COOKIE_SECURE must resolve to true in production.")
+        if problems:
+            raise RuntimeError("Invalid configuration:\n- " + "\n- ".join(problems))
 
 
 settings = Settings()
