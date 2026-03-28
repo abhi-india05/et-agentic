@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 from datetime import datetime
@@ -386,3 +386,30 @@ class ExplainabilityOutput(StrictBaseModel):
     human_review_recommended: bool = False
     human_review_reasons: List[str] = Field(default_factory=list)
     impact_metrics: Dict[str, Any] = Field(default_factory=dict)
+
+
+class OutreachEntryStatus(str, Enum):
+    DRAFT = "draft"
+    SENT = "sent"
+    OPENED = "opened"
+    REPLIED = "replied"
+    MEETING_SCHEDULED = "meeting_scheduled"
+    CLOSED_WON = "closed_won"
+    CLOSED_LOST = "closed_lost"
+
+
+class OutreachEntry(StrictBaseModel):
+    id: str
+    user_id: str
+    product_id: Optional[str] = None
+    company_name: str
+    company_domain: Optional[str] = None
+    outreach_type: str = "email"
+    message: Optional[str] = None
+    status: OutreachEntryStatus
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class OutreachEntryStatusUpdate(StrictBaseModel):
+    status: OutreachEntryStatus

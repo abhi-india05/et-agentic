@@ -9,13 +9,15 @@ from fastapi import APIRouter, Depends, Request, Response, status
 from backend.agents.failure_recovery import get_recovery_engine
 from backend.auth.deps import AuthUser, get_current_user, require_role
 from backend.config.settings import settings
-from backend.deps import get_session_repo
+from backend.deps import get_session_repo, get_outreach_entry_repo
 from backend.memory.vector_store import get_vector_store
 from backend.models.schemas import (
     SendEmailRequest,
     SendSequencesRequest,
+    OutreachEntryStatus,
 )
 from backend.repositories.sessions import SessionRepository
+from backend.repositories.outreach_entries import OutreachEntryRepository
 from backend.services.observability import get_metrics_registry
 from backend.tools.crm_tool import get_all_accounts, get_pipeline_stats
 from backend.tools.email_tool import get_email_client, get_email_stats, get_sent_emails
@@ -167,6 +169,7 @@ async def send_email(
 async def send_sequences(
     req: SendSequencesRequest,
     _user: AuthUser = Depends(get_current_user),
+    entry_repo: OutreachEntryRepository = Depends(get_outreach_entry_repo),
 ) -> Dict[str, Any]:
     client = get_email_client()
     results: List[Dict[str, Any]] = []
@@ -182,16 +185,22 @@ async def send_sequences(
             }
             for email in sequence.emails
         ]
+        seq_id = sequence.sequence_id or generate_session_id()
         result = await asyncio.to_thread(
             client.send_sequence,
             to_email=sequence.lead_email,
             to_name=sequence.lead_name or "",
             emails=payload,
-            sequence_id=sequence.sequence_id or generate_session_id(),
+            sequence_id=seq_id,
         )
         results.append(result)
-        total_sent += int(result.get("sent", 0))
+        sent_in_seq = int(result.get("sent", 0))
+        total_sent += sent_in_seq
         total_failed += int(result.get("failed", 0))
+        
+        if sent_in_seq > 0 and sequence.sequence_id:
+            await entry_repo.update_status(sequence.sequence_id, OutreachEntryStatus.SENT)
+            
     return {
         "results": results,
         "summary": {

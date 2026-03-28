@@ -129,7 +129,7 @@ function LeadCard({ lead, twin, sequence }) {
   )
 }
 
-export default function OutreachPage() {
+function LogsTab() {
   const [form, setForm] = useState({
     company: '',
     industry: 'SaaS',
@@ -463,6 +463,128 @@ export default function OutreachPage() {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+function EntriesTab() {
+  const [entries, setEntries] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [statusFilter, setStatusFilter] = useState('')
+  const [companyFilter, setCompanyFilter] = useState('')
+  
+  useEffect(() => {
+    fetchEntries()
+  }, [statusFilter, companyFilter])
+
+  async function fetchEntries() {
+    setLoading(true)
+    try {
+      const response = await api.outreachEntries({ status: statusFilter, company: companyFilter })
+      setEntries(response.data?.entries || response.entries || [])
+    } catch (e) {
+      toast.error('Failed to load outreach entries')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function updateStatus(id, newStatus) {
+    try {
+      await api.updateOutreachStatus(id, newStatus)
+      setEntries(entries.map(e => e.id === id ? { ...e, status: newStatus } : e))
+      toast.success('Status updated')
+    } catch (e) {
+      toast.error('Failed to update status')
+    }
+  }
+
+  const statuses = ['draft', 'sent', 'opened', 'replied', 'meeting_scheduled', 'closed_won', 'closed_lost']
+  const statusColors = {
+    draft: 'bg-muted/20 text-muted border-muted/30',
+    sent: 'bg-info/20 text-info border-info/30',
+    opened: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30',
+    replied: 'bg-success/20 text-success border-success/30',
+    meeting_scheduled: 'bg-plasma/20 text-plasma border-plasma/30',
+    closed_won: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
+    closed_lost: 'bg-danger/20 text-danger border-danger/30'
+  }
+
+  return (
+    <div className="space-y-6">
+      <SectionHeader title="Outreach Pipeline" subtitle="Manage and track your active outreach entries" />
+      <div className="card space-y-4">
+        <div className="flex gap-4">
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="bg-void border border-border rounded-lg px-3 py-2 text-sm text-text focus:border-accent focus:outline-none">
+            <option value="">All Statuses</option>
+            {statuses.map(s => <option key={s} value={s}>{s.replace('_', ' ').toUpperCase()}</option>)}
+          </select>
+          <input type="text" placeholder="Filter by company..." value={companyFilter} onChange={e => setCompanyFilter(e.target.value)} className="bg-void border border-border rounded-lg px-3 py-2 text-sm text-text focus:border-accent focus:outline-none flex-1" />
+        </div>
+        
+        {loading ? <LoadingState message="Loading entries..." /> : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+             {entries.length === 0 ? (
+               <div className="col-span-full text-center text-muted font-mono text-sm py-10 border border-dashed border-border rounded-xl">No entries found.</div>
+             ) : entries.map(entry => (
+               <div key={entry.id} className="border border-border rounded-xl p-4 bg-panel flex flex-col gap-3 relative hover:border-accent/40 transition-colors">
+                 <div className="flex items-center justify-between">
+                   <div className="font-display font-600 text-text truncate pr-2" title={entry.company_name}>{entry.company_name}</div>
+                   <div className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase font-600 border whitespace-nowrap ${statusColors[entry.status] || 'bg-muted/20 text-muted'}`}>
+                     {entry.status.replace('_', ' ')}
+                   </div>
+                 </div>
+                 
+                 <div className="text-xs text-muted flex items-center gap-2">
+                   <Mail className="w-3.5 h-3.5" /> <span className="uppercase tracking-wider font-mono">{entry.outreach_type}</span>
+                 </div>
+                 
+                 {entry.message && (
+                    <p className="text-xs text-text-dim leading-relaxed line-clamp-3 bg-void p-2 rounded border border-border custom-scrollbar overflow-y-auto max-h-24">
+                        {entry.message}
+                    </p>
+                 )}
+                 
+                 <div className="mt-auto pt-3 border-t border-border flex items-center justify-between">
+                   <div className="text-[10px] text-muted font-mono">{new Date(entry.created_at).toLocaleDateString()}</div>
+                   <select 
+                      value={entry.status} 
+                      onChange={e => updateStatus(entry.id, e.target.value)}
+                      className="bg-transparent text-xs font-600 text-accent text-right focus:outline-none cursor-pointer p-0 m-0 hover:text-cyan-300 transition-colors w-1/2 text-ellipsis overflow-hidden"
+                   >
+                     {statuses.map(s => <option key={s} value={s} className="bg-panel text-text text-sm">{s.replace('_', ' ').toUpperCase()}</option>)}
+                   </select>
+                 </div>
+               </div>
+             ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export default function OutreachPage() {
+  const [tab, setTab] = useState('logs')
+  
+  return (
+    <div className="space-y-6 animate-fade-up">
+      <div className="flex gap-2 border-b border-border/50 pb-px">
+        <button 
+          onClick={() => setTab('logs')} 
+          className={`px-4 py-2 text-sm font-mono uppercase tracking-wider transition-colors ${tab === 'logs' ? 'text-accent border-b-2 border-accent' : 'text-muted hover:text-text'}`}
+        >
+          Logs
+        </button>
+        <button 
+          onClick={() => setTab('entries')} 
+          className={`px-4 py-2 text-sm font-mono uppercase tracking-wider transition-colors ${tab === 'entries' ? 'text-accent border-b-2 border-accent' : 'text-muted hover:text-text'}`}
+        >
+          Entries
+        </button>
+      </div>
+      
+      {tab === 'logs' ? <LogsTab /> : <EntriesTab />}
     </div>
   )
 }

@@ -171,4 +171,19 @@ export const api = {
 
   sendSequences: (body) =>
     request('/send-sequences', { method: 'POST', body: JSON.stringify(body) }),
+
+  // --- Outreach Entries ---
+  outreachEntries: ({ page = 1, pageSize = 50, status, company, productId } = {}) => {
+    const params = new URLSearchParams()
+    params.set('page', String(page))
+    params.set('page_size', String(pageSize))
+    if (status) params.set('status', status)
+    if (company) params.set('company', company)
+    if (productId) params.set('product_id', productId)
+    // Note: outreach endpoints are mapped under /outreach
+    return requestWithPagination(`/outreach/entries?${params.toString()}`)
+  },
+
+  updateOutreachStatus: (id, status) =>
+    request(`/outreach/entries/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
 }

@@ -13,15 +13,18 @@ from backend.models.schemas import (
     OutreachRequest,
     ProductContext,
     RiskDetectionRequest,
+    OutreachEntry,
+    OutreachEntryStatus
 )
 from backend.repositories.products import ProductRepository
 from backend.repositories.sessions import SessionRepository
+from backend.repositories.outreach_entries import OutreachEntryRepository
+from backend.deps import get_product_repo, get_session_repo, get_outreach_entry_repo
 from backend.utils.errors import APIError
-from backend.utils.helpers import generate_session_id, now_iso
+from backend.utils.helpers import generate_session_id, now_iso, utcnow
 from backend.utils.logger import bind_context
 
 router = APIRouter(tags=["workflows"])
-
 
 async def _resolve_product_context(
     *,
@@ -116,6 +119,7 @@ async def run_outreach(
     user: AuthUser = Depends(get_current_user),
     product_repo: ProductRepository = Depends(get_product_repo),
     session_repo: SessionRepository = Depends(get_session_repo),
+    entry_repo: OutreachEntryRepository = Depends(get_outreach_entry_repo),
 ) -> Dict[str, Any]:
     product_context = await _resolve_product_context(
         user=user,
@@ -133,7 +137,7 @@ async def run_outreach(
         "product_context": product_context.model_dump(),
         "auto_send": payload.auto_send,
     }
-    return await _run_workflow(
+    result = await _run_workflow(
         task_type="cold_outreach",
         workflow_input=workflow_input,
         request=request,
@@ -141,6 +145,26 @@ async def run_outreach(
         response=response,
         session_repo=session_repo,
     )
+    
+    # Extract sequences and create entries
+    if result.get("status") in ("completed", "completed_with_errors") and "outreach_agent" in result.get("data", {}).get("agent_outputs", {}):
+        sequences = result["data"]["agent_outputs"]["outreach_agent"].get("data", {}).get("sequences", [])
+        for seq in sequences:
+            status = OutreachEntryStatus.SENT if payload.auto_send else OutreachEntryStatus.DRAFT
+            await entry_repo.create_entry(
+                OutreachEntry(
+                    id=seq.get("sequence_id", generate_session_id()),
+                    user_id=user.user_id,
+                    product_id=payload.product_id,
+                    company_name=payload.company,
+                    company_domain=payload.website,
+                    outreach_type="email",
+                    message=seq.get("sequence_strategy"),
+                    status=status
+                )
+            )
+            
+    return result
 
 
 @router.post("/detect-risk")
