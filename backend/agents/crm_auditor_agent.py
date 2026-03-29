@@ -18,6 +18,10 @@ from backend.utils.logger import get_logger, record_audit
 
 logger = get_logger("crm_auditor_agent")
 
+
+def _terminal_log(level: str, message: str) -> None:
+    print(f"[BACKEND][crm_auditor_agent][{level.upper()}] {message}")
+
 STUCK_STAGE_THRESHOLDS = {
     "Discovery": 21,
     "Proposal": 14,
@@ -100,7 +104,10 @@ def _call_llm(prompt: str) -> CRMAuditRecommendation:
         temperature=0.3,
         max_tokens=800,
     )
-    return parse_llm_json(response.choices[0].message.content or "", CRMAuditRecommendation)
+    llm_output = response.choices[0].message.content or ""
+    _terminal_log("success", f"LLM raw output: {llm_output}")
+    logger.info("crm_auditor_llm_output", output=llm_output)
+    return parse_llm_json(llm_output, CRMAuditRecommendation)
 
 
 def run_crm_auditor_agent(session_id: str, user_id: str) -> Dict[str, Any]:
@@ -131,6 +138,7 @@ Return ONLY valid JSON with:
         ).model_dump()
     except Exception as exc:
         logger.warning("crm_auditor_llm_failed", error=str(exc))
+        _terminal_log("failure", f"LLM CRM audit recommendation failed: {exc}")
         recommendations = {
             "audit_score": 65,
             "health_rating": "Fair",
@@ -155,6 +163,7 @@ Return ONLY valid JSON with:
         agent_name="crm_auditor_agent",
         tools_used=["crm_tool", "llm"],
     )
+    _terminal_log("success", f"CRM audit completed for {len(accounts)} accounts")
     record_audit(
         session_id=session_id,
         agent_name="crm_auditor_agent",

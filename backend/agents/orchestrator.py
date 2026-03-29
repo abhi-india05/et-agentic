@@ -27,6 +27,12 @@ from backend.utils.logger import get_logger, record_audit
 
 logger = get_logger("orchestrator")
 
+
+def _terminal_agent_status(agent_name: str, output: Dict[str, Any]) -> None:
+    status = str(output.get("status", "unknown")).lower()
+    tag = "SUCCESS" if status == "success" else "FAILURE"
+    print(f"[BACKEND][{agent_name}][{tag}] status={status}")
+
 ALLOWED_TOOLS_BY_TASK: Dict[str, List[str]] = {
     "cold_outreach": ["scraping_tool", "vector_memory", "llm", "email_tool", "crm_tool"],
     "risk_detection": ["crm_tool", "scraping_tool", "vector_memory", "llm", "email_tool"],
@@ -157,6 +163,7 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
             "Prospecting failed and no deterministic fallback could be generated.",
         )
         agent_outputs["prospecting_agent"] = prospecting
+        _terminal_agent_status("prospecting_agent", prospecting)
         (completed_agents if prospecting.get("status") == "success" else failed_agents).append("prospecting_agent")
 
         twin = _execute_agent(
@@ -173,6 +180,7 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
             "Digital twin simulation failed.",
         )
         agent_outputs["digital_twin_agent"] = twin
+        _terminal_agent_status("digital_twin_agent", twin)
         (completed_agents if twin.get("status") == "success" else failed_agents).append("digital_twin_agent")
 
         outreach = _execute_agent(

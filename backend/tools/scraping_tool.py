@@ -1,4 +1,5 @@
 import csv
+import glob
 import os
 import re
 from typing import Any, Dict, Optional, List
@@ -27,132 +28,205 @@ COMPANY_SIGNALS = {
 }
 
 
-def enrich_company(company: str, industry: str = "default") -> Dict[str, Any]:
-    logger.info("Enriching company data", company=company, industry=industry)
-    # First, attempt to load leads from a CSV dataset if provided.
-    csv_paths: List[str] = []
+def _normalize_company_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
+
+
+def _company_candidates_from_row(row: Dict[str, Any]) -> List[str]:
+    candidates = [
+        row.get("company"),
+        row.get("company_name"),
+        row.get("experiences0company"),
+        row.get("experiences1company"),
+        row.get("occupation"),
+        row.get("headline"),
+    ]
+    values = []
+    for item in candidates:
+        text = (item or "").strip()
+        if text:
+            values.append(text)
+    return values
+
+
+def _matches_company(requested_company: str, row: Dict[str, Any]) -> bool:
+    requested = _normalize_company_name(requested_company)
+    if not requested:
+        return False
+
+    request_tokens = set(requested.split())
+    for candidate in _company_candidates_from_row(row):
+        norm_candidate = _normalize_company_name(candidate)
+        if not norm_candidate:
+            continue
+        if requested in norm_candidate or norm_candidate in requested:
+            return True
+        candidate_tokens = set(norm_candidate.split())
+        if request_tokens and candidate_tokens and request_tokens.intersection(candidate_tokens):
+            return True
+    return False
+
+
+def _build_dataset_paths() -> List[str]:
+    paths: List[str] = []
     env_path = os.environ.get("LINKEDIN_CSV_PATH")
     if env_path:
-        csv_paths.append(env_path)
+        paths.append(os.path.abspath(env_path))
 
-    # Common locations to check
-    csv_paths.extend([
-        os.path.join(os.path.dirname(__file__), "..", "data", "linkedin.csv"),
-        os.path.join(os.path.dirname(__file__), "..", "..", "data", "linkedin.csv"),
-        os.path.join(os.getcwd(), "data", "linkedin.csv"),
-    ])
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
+    root_data_dir = os.path.abspath(os.path.join(os.getcwd(), "backend", "data"))
 
-    found_rows = []
-    for p in csv_paths:
-        try:
-            p = os.path.abspath(p)
-            if not os.path.exists(p):
-                continue
-            with open(p, newline="", encoding="utf-8") as fh:
-                reader = csv.DictReader(fh)
-                for row in reader:
-                    # Gather possible company fields from the CSV row to support different export formats
-                    candidate_keys = [
-                        "company",
-                        "company_name",
-                        "row_company",
-                        "full_name",
-                        "occupation",
-                        "experiences0company",
-                        "experiences1company",
-                        "experiences0company_linkedin_profile_url",
-                    ]
-                    row_company = ""
-                    for k in candidate_keys:
-                        v = (row.get(k) or "").strip()
-                        if v:
-                            # prefer short tokens that look like a company name
-                            row_company = v
-                            break
+    glob_patterns = [
+        os.path.join(base_dir, "*linkedin*.csv"),
+        os.path.join(base_dir, "*10k*li*.csv"),
+        os.path.join(base_dir, "*.csv"),
+        os.path.join(root_data_dir, "*linkedin*.csv"),
+        os.path.join(root_data_dir, "*10k*li*.csv"),
+        os.path.join(root_data_dir, "*.csv"),
+    ]
+    for pattern in glob_patterns:
+        paths.extend(glob.glob(pattern))
 
-                    # If still empty, try to infer from headline/occupation fields
-                    if not row_company:
-                        row_company = (row.get("headline") or row.get("summary") or "").strip()
-
-                    if not row_company:
-                        continue
-
-                    # Case-insensitive substring match to allow loose matches like 'Vodafone' vs 'vodafone'
-                    try:
-                        if company.lower() in row_company.lower() or row_company.lower() in company.lower():
-                            found_rows.append(row)
-                    except Exception:
-                        continue
-            if found_rows:
-                logger.info("Loaded leads from CSV", path=p, matches=len(found_rows))
-                break
-        except Exception:
+    deduped: List[str] = []
+    seen = set()
+    for path in paths:
+        abs_path = os.path.abspath(path)
+        if abs_path in seen:
             continue
+        seen.add(abs_path)
+        deduped.append(abs_path)
+    return deduped
 
-    industry_key = industry.lower().split()[0] if industry else "default"
-    personas = INDUSTRY_PERSONAS.get(industry_key, INDUSTRY_PERSONAS["default"])
+
+def _safe_snippet(value: str, max_len: int = 180) -> str:
+    compact = re.sub(r"\s+", " ", (value or "").strip())
+    if len(compact) <= max_len:
+        return compact
+    return compact[: max_len - 3].rstrip() + "..."
+
+
+def _row_to_lead(row: Dict[str, Any], fallback_company: str, dataset_path: str) -> Dict[str, Any]:
+    full_name = (row.get("full_name") or "").strip()
+    first_name = (row.get("first_name") or "").strip()
+    last_name = (row.get("last_name") or "").strip()
+    name = full_name or " ".join(part for part in [first_name, last_name] if part).strip() or "Unknown Lead"
+
+    role = (
+        (row.get("experiences0title") or "").strip()
+        or (row.get("occupation") or "").strip()
+        or (row.get("experiences1title") or "").strip()
+        or ""
+    )
+    company = (
+        (row.get("experiences0company") or "").strip()
+        or (row.get("experiences1company") or "").strip()
+        or (row.get("company") or "").strip()
+        or fallback_company
+    )
+    headline = (row.get("headline") or "").strip()
+    about = (row.get("summary") or "").strip()
+    activity = (
+        (row.get("experiences0description") or "").strip()
+        or (row.get("experiences1description") or "").strip()
+    )
+
+    public_identifier = (row.get("public_identifier") or "").strip()
+    linkedin = (
+        (row.get("linkedin") or "").strip()
+        or (row.get("linkedin_url") or "").strip()
+        or (f"https://www.linkedin.com/in/{public_identifier}" if public_identifier else "")
+    )
+    email = ((row.get("email") or "").strip() or (row.get("work_email") or "").strip() or "")
+
+    signals: List[str] = []
+    if headline:
+        signals.append(f"headline: {_safe_snippet(headline, 120)}")
+    if activity:
+        signals.append(f"activity: {_safe_snippet(activity, 120)}")
+    if role:
+        signals.append(f"role: {role}")
+
+    completeness = sum(bool(value) for value in [role, company, headline, about, activity, linkedin])
+    score = round(min(0.95, 0.3 + (0.1 * completeness)), 2)
+
+    return {
+        "lead_id": generate_id("lead"),
+        "name": name,
+        "title": role or "",
+        "role": role or "",
+        "company": company,
+        "email": email,
+        "linkedin": linkedin,
+        "headline": headline,
+        "about": about,
+        "activity": activity,
+        "source_profile": public_identifier,
+        "source_dataset": os.path.basename(dataset_path),
+        "score": score,
+        "signals": signals,
+        "enriched_at": now_iso(),
+    }
+
+
+def enrich_company(company: str, industry: str = "default") -> Dict[str, Any]:
+    logger.info("Enriching company data", company=company, industry=industry)
+    csv_paths = _build_dataset_paths()
 
     slug = re.sub(r'[^a-z0-9]', '-', company.lower())
     domain = f"{slug}.com"
 
-    leads = []
-    if found_rows:
-        for i, row in enumerate(found_rows[:5]):
-            name = (row.get("name") or row.get("full_name") or "").strip()
-            title = (row.get("title") or row.get("job_title") or personas[i % len(personas)]).strip()
-            email = (row.get("email") or row.get("work_email") or "").strip()
-            linkedin = (row.get("linkedin") or row.get("linkedin_url") or "").strip()
-            try:
-                score = float(row.get("score") or row.get("ranking") or 0.7)
-            except Exception:
-                score = 0.7
+    leads: List[Dict[str, Any]] = []
+    matched_path = ""
 
-            leads.append({
-                "lead_id": generate_id("lead"),
-                "name": name or f"Lead {i+1}",
-                "title": title,
-                "company": company,
-                "email": email,
-                "linkedin": linkedin,
-                "score": round(score, 2),
-                "signals": list(COMPANY_SIGNALS.values())[:2],
-                "enriched_at": now_iso(),
-            })
-    else:
-        # Fallback: synthesize leads as before when no CSV data is available.
-        for i, title in enumerate(personas[:2]):
-            first_names = ["Alex", "Jordan", "Morgan", "Taylor", "Casey"]
-            last_names = ["Smith", "Johnson", "Williams", "Brown", "Davis"]
-            first = first_names[i % len(first_names)]
-            last = last_names[i % len(last_names)]
-            email_format = f"{first.lower()}.{last.lower()}@{domain}"
+    for path in csv_paths:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, newline="", encoding="utf-8") as fh:
+                reader = csv.DictReader(fh)
+                fieldnames = set(reader.fieldnames or [])
+                if not fieldnames.intersection({"public_identifier", "full_name", "headline", "experiences0company"}):
+                    continue
 
-            leads.append({
-                "lead_id": generate_id("lead"),
-                "name": f"{first} {last}",
-                "title": title,
-                "company": company,
-                "email": email_format,
-                "linkedin": f"https://linkedin.com/in/{first.lower()}-{last.lower()}",
-                "score": round(0.65 + (i * 0.1), 2),
-                "signals": list(COMPANY_SIGNALS.values())[:2],
-                "enriched_at": now_iso(),
-            })
+                matched_rows: List[Dict[str, Any]] = []
+                for row in reader:
+                    if _matches_company(company, row):
+                        matched_rows.append(row)
+                    if len(matched_rows) >= 12:
+                        break
 
-    signals = [
-        "Active on LinkedIn with posts about scaling challenges",
-        "Job postings suggest technology investment",
-        "Recent press releases indicate growth phase",
-    ]
+                if matched_rows:
+                    matched_path = path
+                    leads = [_row_to_lead(row, company, path) for row in matched_rows[:5]]
+                    logger.info("Loaded leads from LinkedIn dataset", path=path, matches=len(leads))
+                    break
+        except Exception as exc:
+            logger.warning("linkedin_dataset_read_failed", path=path, error=str(exc))
+
+    intent_signals: List[str] = []
+    for lead in leads:
+        for signal in lead.get("signals", []):
+            if signal and signal not in intent_signals:
+                intent_signals.append(signal)
+            if len(intent_signals) >= 6:
+                break
+        if len(intent_signals) >= 6:
+            break
+
+    industry_key = industry.lower().split()[0] if industry else "default"
+    employees_hint = "unknown"
+    if industry_key in INDUSTRY_PERSONAS:
+        employees_hint = "dataset_not_provided"
 
     return {
         "company": company,
         "domain": domain,
         "industry": industry,
-        "estimated_employees": "100-500",
-        "tech_stack_signals": ["Salesforce", "Slack", "AWS"],
+        "estimated_employees": employees_hint,
+        "tech_stack_signals": [],
         "leads": leads,
-        "intent_signals": signals,
+        "intent_signals": intent_signals,
+        "data_source": os.path.basename(matched_path) if matched_path else "",
         "enriched_at": now_iso(),
     }
 

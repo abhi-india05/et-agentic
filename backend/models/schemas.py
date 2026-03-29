@@ -1,11 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.auth.passwords import validate_password_strength
 from backend.utils.helpers import sanitize_text, utcnow
@@ -56,12 +56,24 @@ class WorkflowValidation(StrictBaseModel):
 class Lead(StrictBaseModel):
     name: str
     title: str
+    role: Optional[str] = None
     company: str
     email: Optional[str] = None
     linkedin: Optional[str] = None
+    headline: Optional[str] = None
+    about: Optional[str] = None
+    activity: Optional[str] = None
+    source_profile: Optional[str] = None
     score: float = Field(default=0.0, ge=0.0, le=1.0)
     signals: List[str] = Field(default_factory=list)
     pain_points: List[str] = Field(default_factory=list)
+
+
+class EmailExplanation(StrictBaseModel):
+    used_fields: List[str] = Field(default_factory=list)
+    insight: str = ""
+    reasoning: str = ""
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class EmailStep(StrictBaseModel):
@@ -69,8 +81,16 @@ class EmailStep(StrictBaseModel):
     send_day: int = Field(ge=1, le=30)
     subject: str
     body: str
+    email: str = ""
     cta: str
     angle: str
+    explanation: Optional[EmailExplanation] = None
+
+    @model_validator(mode="after")
+    def _sync_email_and_body(self) -> "EmailStep":
+        if not self.email and self.body:
+            self.email = self.body
+        return self
 
 
 class EmailSequenceResult(StrictBaseModel):

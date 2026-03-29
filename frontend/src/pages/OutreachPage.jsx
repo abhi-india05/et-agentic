@@ -151,6 +151,16 @@ function LogsTab({ sessionId }) {
   const [sendingDrafts, setSendingDrafts] = useState(false)
   const [sendSummary, setSendSummary] = useState(null)
 
+  function logAgentTerminalStatus(finalOutput, source) {
+    const outputs = finalOutput?.agent_outputs || {}
+    const prospectingStatus = outputs?.prospecting_agent?.status || 'unknown'
+    const digitalTwinStatus = outputs?.digital_twin_agent?.status || 'unknown'
+    const prospectingTag = prospectingStatus === 'success' ? 'SUCCESS' : 'FAILURE'
+    const digitalTwinTag = digitalTwinStatus === 'success' ? 'SUCCESS' : 'FAILURE'
+    console.log(`[FRONTEND][${source}][prospecting_agent][${prospectingTag}] status=${prospectingStatus}`)
+    console.log(`[FRONTEND][${source}][digital_twin_agent][${digitalTwinTag}] status=${digitalTwinStatus}`)
+  }
+
   useEffect(() => {
     if (!sessionId) {
       setHydratingSession(false)
@@ -204,9 +214,11 @@ function LogsTab({ sessionId }) {
           status: session.status || hydratedFinalOutput.status || 'completed',
           data: hydratedFinalOutput,
         })
+        logAgentTerminalStatus(hydratedFinalOutput, 'resume-load')
       } catch (e) {
         if (cancelled) return
         setError(e.message)
+        console.error(`[FRONTEND][resume-load][FAILURE] ${e.message}`)
       } finally {
         if (!cancelled) {
           setHydratingSession(false)
@@ -269,9 +281,11 @@ function LogsTab({ sessionId }) {
       })
       const res = await api.runOutreach(payload)
       setResult(res)
+      logAgentTerminalStatus(res?.data || {}, 'run-outreach')
       toast.success(sessionId ? 'Workflow continued successfully' : 'Outreach campaign launched successfully')
     } catch (e) {
       setError(e.message)
+      console.error(`[FRONTEND][run-outreach][FAILURE] ${e.message}`)
     } finally {
       setLoading(false)
     }

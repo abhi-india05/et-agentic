@@ -18,6 +18,10 @@ from backend.utils.logger import get_logger, record_audit
 logger = get_logger("deal_intelligence_agent")
 
 
+def _terminal_log(level: str, message: str) -> None:
+    print(f"[BACKEND][deal_intelligence_agent][{level.upper()}] {message}")
+
+
 @retry(stop=stop_after_attempt(settings.max_retries + 1), wait=wait_exponential(min=1, max=4))
 def analyze_deal_risk(account: Dict[str, Any]) -> DealRisk:
     signals = detect_intent_signals(account.get("company", ""), account)
@@ -53,7 +57,10 @@ Return ONLY valid JSON:
         temperature=0.3,
         max_tokens=1000,
     )
-    return parse_llm_json(response.choices[0].message.content or "", DealRisk)
+    llm_output = response.choices[0].message.content or ""
+    _terminal_log("success", f"LLM raw output: {llm_output}")
+    logger.info("deal_intelligence_llm_output", output=llm_output)
+    return parse_llm_json(llm_output, DealRisk)
 
 
 def _fallback_risk(account: Dict[str, Any]) -> DealRisk:
@@ -121,6 +128,7 @@ def run_deal_intelligence_agent(
             analyzed.append(analyze_deal_risk(account).model_dump())
         except Exception as exc:
             logger.warning("deal_risk_llm_failed", account_id=account.get("account_id"), error=str(exc))
+            _terminal_log("failure", f"LLM risk analysis failed for account {account.get('account_id', 'unknown')}: {exc}")
             analyzed.append(_fallback_risk(account).model_dump())
 
     analyzed.sort(key=lambda item: item.get("risk_score", 0.0), reverse=True)
@@ -145,6 +153,7 @@ def run_deal_intelligence_agent(
         agent_name="deal_intelligence_agent",
         tools_used=["crm_tool", "scraping_tool", "vector_memory", "llm"],
     )
+    _terminal_log("success", f"Analyzed {len(analyzed)} at-risk deals")
     record_audit(
         session_id=session_id,
         agent_name="deal_intelligence_agent",

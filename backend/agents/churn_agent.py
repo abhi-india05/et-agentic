@@ -1,6 +1,6 @@
 ﻿from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
@@ -13,6 +13,10 @@ from backend.utils.helpers import build_agent_response, generate_id
 from backend.utils.logger import get_logger, record_audit
 
 logger = get_logger("churn_agent")
+
+
+def _terminal_log(level: str, message: str) -> None:
+    print(f"[BACKEND][churn_agent][{level.upper()}] {message}")
 
 
 def _get_openai_client():
@@ -60,6 +64,8 @@ def _call_llm_for_retention(prompt: str) -> str:
         max_tokens=300,
     )
     text = (response.choices[0].message.content or "").strip()
+    _terminal_log("success", f"LLM raw output: {text}")
+    logger.info("churn_llm_output", output=text)
     if not text:
         raise ValueError("LLM returned empty retention strategy")
     return text
@@ -88,6 +94,7 @@ Write a specific, actionable 2-3 sentence retention strategy. Return ONLY the st
         return _call_llm_for_retention(prompt)
     except Exception as exc:
         logger.warning("retention_llm_failed", company=account.get("company"), error=str(exc))
+        _terminal_log("failure", f"LLM retention strategy failed for {account.get('company', 'unknown')}: {exc}")
         return (
             "Deploy immediate adoption workshops to reverse churn risk. "
             f"Focus on lifting feature adoption from {feature_adoption_str}, resolving active support pain, and attaching a measurable 30-day success plan."
@@ -184,6 +191,7 @@ def run_churn_agent(
         agent_name="churn_agent",
         tools_used=["crm_tool", "llm"],
     )
+    _terminal_log("success", f"Analyzed {len(active_accounts)} accounts; top churn risks: {len(top_risks)}")
     memory.add_document(
         doc_id=generate_id("churn"),
         content=f"Churn analysis completed for {len(active_accounts)} accounts.",

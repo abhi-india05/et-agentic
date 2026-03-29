@@ -1,13 +1,7 @@
 from __future__ import annotations
 
-import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
-
-from backend.agents.guardrails import parse_llm_json
-from backend.config.settings import settings
-from backend.llm.client import get_llm_client
 from backend.memory.vector_store import get_vector_store
 from backend.models.schemas import ProspectingOutput
 from backend.tools.scraping_tool import enrich_company
@@ -17,47 +11,88 @@ from backend.utils.logger import get_logger, record_audit
 logger = get_logger("prospecting_agent")
 
 
-def _get_openai_client():
-    return get_llm_client()
+def _terminal_log(level: str, message: str) -> None:
+    print(f"[BACKEND][prospecting_agent][{level.upper()}] {message}")
 
 
-@retry(
-    stop=stop_after_attempt(settings.max_retries + 1),
-    wait=wait_exponential(multiplier=1, min=1, max=4),
-    retry=retry_if_exception_type((ValueError, RuntimeError)),
-    reraise=True,
-)
-def _call_llm_for_leads(prompt: str) -> ProspectingOutput:
-    client = _get_openai_client()
-    response = client.chat.completions.create(
-        model=settings.openai_model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.4,
-        max_tokens=1200,
-    )
-    return parse_llm_json(response.choices[0].message.content or "", ProspectingOutput)
+def _derive_pain_points(lead: Dict[str, Any]) -> List[str]:
+    about_text = str(lead.get("about") or "").lower()
+    activity_text = str(lead.get("activity") or "").lower()
+    headline_text = str(lead.get("headline") or "").lower()
+    combined = " ".join([headline_text, about_text, activity_text])
+
+    pain_points: List[str] = []
+    keyword_map = {
+        "forecast": "Forecast reliability",
+        "pipeline": "Pipeline visibility",
+        "retention": "Customer retention",
+        "automation": "Process automation",
+        "analytics": "Actionable analytics",
+        "risk": "Risk detection",
+        "operations": "Operational consistency",
+    }
+    for keyword, label in keyword_map.items():
+        if keyword in combined:
+            pain_points.append(label)
+    return pain_points[:3]
 
 
-def _fallback_prospecting(company: str, enriched: Dict[str, Any]) -> ProspectingOutput:
-    leads = enriched.get("leads", [])[:2]
-    return ProspectingOutput(
-        leads=[
+def _build_grounded_prospecting(company: str, enriched: Dict[str, Any]) -> ProspectingOutput:
+    raw_leads = list(enriched.get("leads", []))
+    raw_leads.sort(key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)
+    selected = raw_leads[:2]
+
+    mapped_leads = []
+    for lead in selected:
+        role = str(lead.get("role") or lead.get("title") or "").strip()
+        observed_fields = []
+        for field in ["headline", "about", "activity", "linkedin"]:
+            if str(lead.get(field) or "").strip():
+                observed_fields.append(field)
+
+        mapped_leads.append(
             {
                 "name": lead.get("name", "Unknown Lead"),
-                "title": lead.get("title", "Revenue Leader"),
-                "company": company,
-                "email": lead.get("email"),
-                "linkedin": lead.get("linkedin"),
-                "score": lead.get("score", 0.55),
-                "signals": lead.get("signals", []),
-                "pain_points": ["Pipeline visibility", "Revenue predictability"],
-                "why_prioritized": "Fallback enrichment selected this lead from available firmographic data.",
+                "title": role,
+                "role": role,
+                "company": lead.get("company") or company,
+                "email": lead.get("email") or "",
+                "linkedin": lead.get("linkedin") or "",
+                "headline": lead.get("headline") or "",
+                "about": lead.get("about") or "",
+                "activity": lead.get("activity") or "",
+                "source_profile": lead.get("source_profile") or "",
+                "score": float(lead.get("score", 0.0) or 0.0),
+                "signals": lead.get("signals", []) or [],
+                "pain_points": _derive_pain_points(lead),
+                "why_prioritized": (
+                    f"Selected from LinkedIn dataset using observed fields: {', '.join(observed_fields) if observed_fields else 'role/company match only'}."
+                ),
             }
-            for lead in leads
-        ],
-        company_summary=f"{company} appears to be a viable revenue intelligence prospect.",
-        recommended_approach="Lead with revenue visibility, churn prevention, and pipeline risk reduction outcomes.",
-        icp_fit_score=0.58,
+        )
+
+    data_source = enriched.get("data_source") or "LinkedIn dataset"
+    if mapped_leads:
+        company_summary = (
+            f"Matched {len(raw_leads)} LinkedIn profile(s) for '{company}' from '{data_source}'. "
+            f"Returning the top {len(mapped_leads)} by completeness score."
+        )
+        recommended_approach = (
+            "Reference only observed profile evidence (headline/about/activity) and avoid assumptions beyond those fields."
+        )
+    else:
+        company_summary = f"No matching LinkedIn profiles were found for '{company}' in the available dataset."
+        recommended_approach = "Skip outreach generation until a grounded profile match exists in the LinkedIn dataset."
+
+    icp_fit_score = 0.0
+    if mapped_leads:
+        icp_fit_score = sum(float(item.get("score", 0.0)) for item in mapped_leads) / len(mapped_leads)
+
+    return ProspectingOutput(
+        leads=mapped_leads,
+        company_summary=company_summary,
+        recommended_approach=recommended_approach,
+        icp_fit_score=round(float(icp_fit_score), 4),
     )
 
 
@@ -67,58 +102,22 @@ def run_prospecting_agent(
     company_size: str,
     session_id: str,
     notes: str = "",
+    product_context: Optional[Dict[str, str]] = None,
     user_id: str = None,
 ) -> Dict[str, Any]:
     if not user_id:
         raise ValueError("user_id is required")
-        
+
+    _ = company_size
+    _ = notes
+    _ = product_context
+
     logger.info("prospecting_agent_start", company=company, session_id=session_id)
     memory = get_vector_store()
     namespace = user_id
 
-    try:
-        enriched = enrich_company(company, industry)
-        prior_context = memory.get_context_for_company(company, namespace=namespace)
-        prompt = f"""You are an expert B2B sales prospecting agent.
-
-Company: {company}
-Industry: {industry}
-Size: {company_size}
-Notes: {notes}
-
-Enriched Data:
-{json.dumps(enriched, indent=2)}
-
-Prior Interaction Context:
-{prior_context}
-
-Identify the top 2 decision-makers most likely to champion a revenue intelligence platform.
-
-Return ONLY JSON with:
-{{
-  \"leads\": [
-    {{
-      \"name\": \"Full Name\",
-      \"title\": \"Job Title\",
-      \"company\": \"{company}\",
-      \"email\": \"email@company.com\",
-      \"linkedin\": \"https://linkedin.com/in/profile\",
-      \"score\": 0.81,
-      \"signals\": [\"signal 1\"],
-      \"pain_points\": [\"pain 1\"],
-      \"why_prioritized\": \"reason\"
-    }}
-  ],
-  \"company_summary\": \"brief summary\",
-  \"recommended_approach\": \"how to approach\",
-  \"icp_fit_score\": 0.78
-}}"""
-
-        parsed = _call_llm_for_leads(prompt)
-    except Exception as exc:
-        logger.warning("prospecting_llm_failed", company=company, error=str(exc))
-        enriched = enrich_company(company, industry)
-        parsed = _fallback_prospecting(company, enriched)
+    enriched = enrich_company(company, industry)
+    parsed = _build_grounded_prospecting(company, enriched)
 
     memory.add_document(
         doc_id=generate_id("prospect"),
@@ -127,14 +126,18 @@ Return ONLY JSON with:
         namespace=namespace,
     )
 
-    confidence = float(parsed.icp_fit_score or 0.55)
+    confidence = float(parsed.icp_fit_score or 0.0)
     result = build_agent_response(
         status="success",
         data=parsed.model_dump(),
-        reasoning=f"Identified {len(parsed.leads)} qualified leads for {company}. ICP fit: {confidence:.0%}.",
+        reasoning=f"Identified {len(parsed.leads)} grounded lead(s) for {company}. ICP fit: {confidence:.0%}.",
         confidence=confidence,
         agent_name="prospecting_agent",
-        tools_used=["scraping_tool", "vector_memory", "llm"],
+        tools_used=["scraping_tool", "vector_memory"],
+    )
+    _terminal_log(
+        "success",
+        f"Generated {len(parsed.leads)} grounded lead(s) for {company} from {enriched.get('data_source') or 'LinkedIn dataset'}",
     )
     record_audit(
         session_id=session_id,

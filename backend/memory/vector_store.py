@@ -21,6 +21,10 @@ from backend.utils.logger import get_logger
 
 logger = get_logger("vector_store")
 
+
+def _terminal_log(level: str, message: str) -> None:
+    print(f"[BACKEND][vector_store][{level.upper()}] {message}")
+
 try:
     import faiss
 
@@ -62,9 +66,14 @@ class VectorMemoryStore:
                     model=settings.openai_embedding_model,
                     input=text[:8000],
                 )
-                return np.array(response.data[0].embedding, dtype=np.float32)
+                embedding = np.array(response.data[0].embedding, dtype=np.float32)
+                preview = embedding[:8].tolist()
+                _terminal_log("success", f"Embedding raw output (first 8 values): {preview}")
+                logger.info("embedding_llm_output", output_preview=preview, dimension=len(embedding))
+                return embedding
             except Exception as e:
                 logger.warning("embedding_fallback", error=str(e))
+                _terminal_log("failure", f"Embedding generation failed: {e}")
 
         rng = np.random.default_rng(abs(hash(text)) % (2**32))
         return rng.standard_normal(self.dimension).astype(np.float32)

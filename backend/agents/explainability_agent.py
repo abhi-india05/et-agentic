@@ -16,6 +16,10 @@ from backend.utils.logger import get_logger, record_audit
 logger = get_logger("explainability_agent")
 
 
+def _terminal_log(level: str, message: str) -> None:
+    print(f"[BACKEND][explainability_agent][{level.upper()}] {message}")
+
+
 def _extract_key_data(agent_name: str, output: Dict[str, Any]) -> Dict[str, Any]:
     data = output.get("data", {})
     if agent_name == "prospecting_agent":
@@ -71,7 +75,10 @@ def _call_llm(prompt: str) -> ExplainabilityOutput:
         temperature=0.3,
         max_tokens=1200,
     )
-    return parse_llm_json(response.choices[0].message.content or "", ExplainabilityOutput)
+    llm_output = response.choices[0].message.content or ""
+    _terminal_log("success", f"LLM raw output: {llm_output}")
+    logger.info("explainability_llm_output", output=llm_output)
+    return parse_llm_json(llm_output, ExplainabilityOutput)
 
 
 def run_explainability_agent(session_id: str, agent_outputs: Dict[str, Any], task_type: str) -> Dict[str, Any]:
@@ -110,6 +117,7 @@ Return ONLY valid JSON with:
         )
     except Exception as exc:
         logger.warning("explainability_llm_failed", error=str(exc))
+        _terminal_log("failure", f"LLM explanation generation failed: {exc}")
         explanation = _fallback_explanation(task_type, summaries)
 
     payload = explanation.model_dump()
@@ -135,6 +143,7 @@ Return ONLY valid JSON with:
         agent_name="explainability_agent",
         tools_used=["llm"],
     )
+    _terminal_log("success", f"Generated explainability output for task '{task_type}'")
     record_audit(
         session_id=session_id,
         agent_name="explainability_agent",
