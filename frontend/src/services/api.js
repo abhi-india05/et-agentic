@@ -158,6 +158,29 @@ export const api = {
   refineOutreachEmail: (body) =>
     request('/outreach/refine-email', { method: 'POST', body: JSON.stringify(body) }),
 
+  customers: ({ page = 1, pageSize = 50, query } = {}) => {
+    const params = new URLSearchParams()
+    params.set('page', String(page))
+    params.set('page_size', String(pageSize))
+    if (query) params.set('query', query)
+    return request(`/outreach/customers?${params.toString()}`)
+  },
+
+  customerDetail: (customerId) =>
+    request(`/outreach/customers/${encodeURIComponent(customerId)}`),
+
+  createCustomer: (body) =>
+    request('/outreach/customers', { method: 'POST', body: JSON.stringify(body) }),
+
+  markCustomerReplied: (customerId) =>
+    request(`/outreach/customers/${encodeURIComponent(customerId)}/mark-replied`, { method: 'PATCH' }),
+
+  addCustomerFromEntry: (entryId, body) =>
+    request(`/outreach/customers/from-entry/${encodeURIComponent(entryId)}`, {
+      method: 'POST',
+      body: JSON.stringify(body || {}),
+    }),
+
   // --- Outreach Sessions (history / resume) ---
   outreachSessions: ({ page = 1, pageSize = 50 } = {}) => {
     const params = new URLSearchParams()

@@ -79,15 +79,15 @@ class Settings(BaseSettings):
     auth_secret_key: str = Field(default="change-me", alias="AUTH_SECRET_KEY")
     auth_algorithm: str = Field(default="HS256", alias="AUTH_ALGORITHM")
     auth_access_token_expire_minutes: int = Field(
-        default=15,
+        default=60,
         ge=15,
-        le=30,
+        le=240,
         alias="AUTH_ACCESS_TOKEN_EXPIRE_MINUTES",
     )
     auth_refresh_token_expire_days: int = Field(
-        default=14,
+        default=30,
         ge=7,
-        le=30,
+        le=90,
         alias="AUTH_REFRESH_TOKEN_EXPIRE_DAYS",
     )
     auth_cookie_name: str = Field(default="revops_access_token", alias="AUTH_COOKIE_NAME")

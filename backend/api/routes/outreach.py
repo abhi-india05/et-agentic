@@ -9,13 +9,22 @@ from fastapi import APIRouter, Depends
 from backend.agents.guardrails import parse_llm_json
 from backend.auth.deps import AuthUser, get_current_user
 from backend.config.settings import settings
-from backend.deps import get_outreach_entry_repo, get_session_repo
+from backend.deps import get_customer_repo, get_outreach_entry_repo, get_session_repo
 from backend.llm.gemini_client import call_gemini
-from backend.models.schemas import OutreachEntryStatusUpdate, RefineEmailRequest, StrictBaseModel
+from backend.models.schemas import (
+    Customer,
+    CustomerCreateFromEntryRequest,
+    CustomerCreateRequest,
+    OutreachEntryStatus,
+    OutreachEntryStatusUpdate,
+    RefineEmailRequest,
+    StrictBaseModel,
+)
+from backend.repositories.customers import CustomerRepository
 from backend.repositories.outreach_entries import OutreachEntryRepository
 from backend.repositories.sessions import SessionRepository
 from backend.utils.errors import APIError
-from backend.utils.helpers import clamp_page_size, now_iso
+from backend.utils.helpers import clamp_page_size, generate_id, now_iso, utcnow
 from backend.utils.logger import get_logger, record_audit
 
 router = APIRouter(tags=["outreach"])
@@ -153,6 +162,200 @@ async def update_outreach_status(
     return {
         "entry": updated.model_dump(),
         "timestamp": now_iso()
+    }
+
+
+@router.get("/customers")
+async def list_customers(
+    page: int = 1,
+    page_size: Optional[int] = None,
+    query: Optional[str] = None,
+    user: AuthUser = Depends(get_current_user),
+    repo: CustomerRepository = Depends(get_customer_repo),
+) -> Dict[str, Any]:
+    normalized_size = clamp_page_size(page_size or 50, default=50, max_value=200)
+    customers, total = await repo.list_customers(
+        user_id=user.user_id,
+        page=max(1, page),
+        page_size=normalized_size,
+        query=query,
+    )
+    return {
+        "customers": [customer.model_dump() for customer in customers],
+        "total": total,
+        "page": max(1, page),
+        "page_size": normalized_size,
+        "timestamp": now_iso(),
+    }
+
+
+@router.get("/customers/{customer_id}")
+async def get_customer(
+    customer_id: str,
+    user: AuthUser = Depends(get_current_user),
+    repo: CustomerRepository = Depends(get_customer_repo),
+) -> Dict[str, Any]:
+    customer = await repo.get_customer(customer_id)
+    if not customer:
+        raise APIError(status_code=404, code="not_found", message="Customer not found")
+    if customer.user_id != user.user_id:
+        raise APIError(status_code=403, code="forbidden", message="Cannot access another user's customer")
+
+    return {
+        "customer": customer.model_dump(),
+        "timestamp": now_iso(),
+    }
+
+
+@router.patch("/customers/{customer_id}/mark-replied")
+async def mark_customer_replied(
+    customer_id: str,
+    user: AuthUser = Depends(get_current_user),
+    repo: CustomerRepository = Depends(get_customer_repo),
+) -> Dict[str, Any]:
+    customer = await repo.get_customer(customer_id)
+    if not customer:
+        raise APIError(status_code=404, code="not_found", message="Customer not found")
+    if customer.user_id != user.user_id:
+        raise APIError(status_code=403, code="forbidden", message="Cannot access another user's customer")
+
+    marked_at = utcnow()
+    updated = await repo.update_marked_as_customer_at(
+        customer_id=customer_id,
+        marked_as_customer_at=marked_at,
+    )
+    if not updated:
+        raise APIError(status_code=500, code="update_failed", message="Failed to mark customer as replied")
+
+    record_audit(
+        session_id="customer_mark_replied",
+        agent_name="customer_manager",
+        action="mark_customer_replied",
+        input_summary=f"Customer: {customer_id}",
+        output_summary=f"Updated replied timestamp for customer {customer_id}",
+        status="success",
+        reasoning="User marked follow-up as replied; refreshed timestamp for risk and churn analytics.",
+        confidence=0.95,
+        extra={
+            "customer_id": customer_id,
+            "user_id": user.user_id,
+            "marked_as_customer_at": marked_at.isoformat(),
+        },
+    )
+
+    return {
+        "customer": updated.model_dump(),
+        "timestamp": now_iso(),
+    }
+
+
+@router.post("/customers")
+async def create_customer(
+    payload: CustomerCreateRequest,
+    user: AuthUser = Depends(get_current_user),
+    repo: CustomerRepository = Depends(get_customer_repo),
+) -> Dict[str, Any]:
+    source_entry_id = (payload.source_entry_id or "").strip()
+    if source_entry_id:
+        existing = await repo.get_by_source_entry(user_id=user.user_id, source_entry_id=source_entry_id)
+        if existing:
+            return {
+                "customer": existing.model_dump(),
+                "created": False,
+                "timestamp": now_iso(),
+            }
+
+    customer = Customer(
+        id=generate_id("cust"),
+        user_id=user.user_id,
+        company_name=payload.company_name,
+        company_domain=payload.company_domain,
+        contact_name=payload.contact_name,
+        contact_email=payload.contact_email,
+        notes=payload.notes,
+        source_entry_id=payload.source_entry_id,
+        source_outreach_status=payload.source_outreach_status,
+        marked_as_customer_at=utcnow(),
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    created = await repo.create_customer(customer)
+    record_audit(
+        session_id="customer_manual",
+        agent_name="customer_manager",
+        action="create_customer",
+        input_summary=f"Company: {created.company_name}",
+        output_summary=f"Created customer {created.id}",
+        status="success",
+        reasoning="Manual customer add from outreach workflow.",
+        confidence=0.93,
+        extra={"customer_id": created.id, "user_id": user.user_id},
+    )
+    return {
+        "customer": created.model_dump(),
+        "created": True,
+        "timestamp": now_iso(),
+    }
+
+
+@router.post("/customers/from-entry/{entry_id}")
+async def create_customer_from_entry(
+    entry_id: str,
+    payload: CustomerCreateFromEntryRequest,
+    user: AuthUser = Depends(get_current_user),
+    entry_repo: OutreachEntryRepository = Depends(get_outreach_entry_repo),
+    customer_repo: CustomerRepository = Depends(get_customer_repo),
+) -> Dict[str, Any]:
+    entry = await entry_repo.get_entry(entry_id)
+    if not entry:
+        raise APIError(status_code=404, code="not_found", message="Outreach entry not found")
+    if entry.user_id != user.user_id:
+        raise APIError(status_code=403, code="forbidden", message="Cannot use another user's outreach entry")
+    if entry.status != OutreachEntryStatus.REPLIED:
+        raise APIError(
+            status_code=400,
+            code="invalid_status",
+            message="Only entries with status 'replied' can be added as customers.",
+        )
+
+    existing = await customer_repo.get_by_source_entry(user_id=user.user_id, source_entry_id=entry.id)
+    if existing:
+        return {
+            "customer": existing.model_dump(),
+            "created": False,
+            "timestamp": now_iso(),
+        }
+
+    customer = Customer(
+        id=generate_id("cust"),
+        user_id=user.user_id,
+        company_name=entry.company_name,
+        company_domain=entry.company_domain,
+        contact_name=payload.contact_name,
+        contact_email=payload.contact_email,
+        notes=payload.notes,
+        source_entry_id=entry.id,
+        source_outreach_status=entry.status,
+        marked_as_customer_at=utcnow(),
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    created = await customer_repo.create_customer(customer)
+    record_audit(
+        session_id="customer_from_reply",
+        agent_name="customer_manager",
+        action="create_customer_from_entry",
+        input_summary=f"Entry: {entry.id} ({entry.company_name})",
+        output_summary=f"Created customer {created.id} from replied entry",
+        status="success",
+        reasoning="User manually converted replied outreach entry into customer.",
+        confidence=0.95,
+        extra={"customer_id": created.id, "entry_id": entry.id, "user_id": user.user_id},
+    )
+    return {
+        "customer": created.model_dump(),
+        "created": True,
+        "timestamp": now_iso(),
     }
 
 

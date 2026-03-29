@@ -15,6 +15,9 @@ const STATUS_CLASS = {
 
 function StatusBadge({ status }) {
   const normalized = String(status || 'pending').toLowerCase()
+  if (normalized === 'completed_with_errors') {
+    return null
+  }
   return (
     <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono uppercase border ${STATUS_CLASS[normalized] || STATUS_CLASS.pending}`}>
       {normalized.replace(/_/g, ' ')}

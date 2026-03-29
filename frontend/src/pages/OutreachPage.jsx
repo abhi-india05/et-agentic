@@ -375,13 +375,16 @@ function LogsTab({ sessionId }) {
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
   const [draftSequences, setDraftSequences] = useState([])
-  const [sender, setSender] = useState({ from_name: 'RevOps AI', from_email: 'sales@revops-ai.com' })
+  const [sender, setSender] = useState({ from_name: 'RevOps AI', from_email: 'mascarenhastest@gmail.com' })
   const [sendingDrafts, setSendingDrafts] = useState(false)
   const [sendSummary, setSendSummary] = useState(null)
   const [editedEmails, setEditedEmails] = useState({})
   const [emailErrors, setEmailErrors] = useState({})
   const [sendingState, setSendingState] = useState({})
   const [leadSendFeedback, setLeadSendFeedback] = useState({})
+  const [sentLeadByKey, setSentLeadByKey] = useState({})
+  const [markingCustomerByLeadKey, setMarkingCustomerByLeadKey] = useState({})
+  const [customerMarkedByLeadKey, setCustomerMarkedByLeadKey] = useState({})
   const [refineTarget, setRefineTarget] = useState(null)
   const [refinePrompt, setRefinePrompt] = useState('')
   const [refiningEmail, setRefiningEmail] = useState(false)
@@ -582,6 +585,9 @@ function LogsTab({ sessionId }) {
     setEmailErrors({})
     setSendingState({})
     setLeadSendFeedback({})
+    setSentLeadByKey({})
+    setMarkingCustomerByLeadKey({})
+    setCustomerMarkedByLeadKey({})
     setRefineExplanationByEmail({})
     setRefinePrompt('')
     setRefineTarget(null)
@@ -731,7 +737,41 @@ function LogsTab({ sessionId }) {
       }
       const res = await api.sendSequences(payload)
       setSendSummary(res.summary || null)
-      setLeadSendFeedback({})
+      const nextFeedback = {}
+      const nextSentLeadByKey = {}
+      const leadKeyBySequenceId = {}
+
+      draftSequences.forEach((seq, seqIdx) => {
+        const leadKey = getLeadKey(seq, seqIdx)
+        const seqId = String(seq.sequence_id || '').trim()
+        if (seqId) {
+          leadKeyBySequenceId[seqId] = leadKey
+        }
+      })
+
+      ;(res.results || []).forEach((item, idx) => {
+        const seqId = String(item?.sequence_id || '').trim()
+        const fallbackLeadKey = getLeadKey(draftSequences[idx], idx)
+        const leadKey = leadKeyBySequenceId[seqId] || fallbackLeadKey
+        const sentInSequence = Number(item?.sent || 0)
+        const failedInSequence = Number(item?.failed || 0)
+
+        if (sentInSequence > 0) {
+          nextSentLeadByKey[leadKey] = true
+        }
+
+        if (sentInSequence > 0 && failedInSequence === 0) {
+          nextFeedback[leadKey] = { type: 'success', message: 'Email sent successfully for this lead.' }
+        } else if (failedInSequence > 0) {
+          nextFeedback[leadKey] = {
+            type: 'failure',
+            message: `Email send result: sent ${sentInSequence}, failed ${failedInSequence}.`,
+          }
+        }
+      })
+
+      setSentLeadByKey((prev) => ({ ...prev, ...nextSentLeadByKey }))
+      setLeadSendFeedback(nextFeedback)
       toast.success('Sequences sent successfully')
     } catch (e) {
       setError(e.message)
@@ -775,12 +815,16 @@ function LogsTab({ sessionId }) {
       const sent = response?.summary?.sent || 0
       const failed = response?.summary?.failed || 0
       if (sent > 0 && failed === 0) {
+        setSentLeadByKey((prev) => ({ ...prev, [leadKey]: true }))
         setLeadSendFeedback((prev) => ({
           ...prev,
           [leadKey]: { type: 'success', message: 'Email sent successfully for this lead.' },
         }))
         toast.success('Email sent successfully')
       } else {
+        if (sent > 0) {
+          setSentLeadByKey((prev) => ({ ...prev, [leadKey]: true }))
+        }
         setLeadSendFeedback((prev) => ({
           ...prev,
           [leadKey]: { type: 'failure', message: `Email send result: sent ${sent}, failed ${failed}.` },
@@ -795,6 +839,61 @@ function LogsTab({ sessionId }) {
       setError(e.message)
     } finally {
       setSendingState((prev) => ({ ...prev, [leadKey]: false }))
+    }
+  }
+
+  async function handleMarkAsRepliedAndCustomer(seq, seqIdx) {
+    if (!seq) return
+
+    const leadKey = getLeadKey(seq, seqIdx)
+    const alreadyMarked = !!customerMarkedByLeadKey[leadKey]
+    if (alreadyMarked) {
+      toast.success('This lead is already marked as customer.')
+      return
+    }
+
+    if (!sentLeadByKey[leadKey]) {
+      toast.error('Send an email first, then mark as replied.')
+      return
+    }
+
+    const entryId = String(seq.sequence_id || '').trim()
+    if (!entryId) {
+      toast.error('Cannot mark as replied because outreach entry id is missing.')
+      return
+    }
+
+    setMarkingCustomerByLeadKey((prev) => ({ ...prev, [leadKey]: true }))
+    try {
+      await api.updateOutreachStatus(entryId, 'replied')
+
+      const candidateEmail = getRecipientEmail(seq, seqIdx)
+      const payload = {
+        contact_name: (seq.lead_name || '').trim() || null,
+        contact_email: EMAIL_RE.test(candidateEmail) ? candidateEmail : null,
+        notes: 'Marked as replied from outreach review panel.',
+      }
+
+      const response = await api.addCustomerFromEntry(entryId, payload)
+      const markedAt = response?.customer?.marked_as_customer_at || response?.customer?.created_at || new Date().toISOString()
+
+      setCustomerMarkedByLeadKey((prev) => ({
+        ...prev,
+        [leadKey]: {
+          customer_id: response?.customer?.id || '',
+          marked_at: markedAt,
+        },
+      }))
+
+      if (response?.created) {
+        toast.success('Marked as replied and added to customers')
+      } else {
+        toast.success('Already in customers list for this outreach entry')
+      }
+    } catch (e) {
+      toast.error(e.message || 'Failed to mark as replied and add customer')
+    } finally {
+      setMarkingCustomerByLeadKey((prev) => ({ ...prev, [leadKey]: false }))
     }
   }
 
@@ -1198,7 +1297,34 @@ function LogsTab({ sessionId }) {
                                 <Sparkles className="w-3.5 h-3.5" />
                                 Refine with AI
                               </button>
+                              <button
+                                type="button"
+                                onClick={() => handleMarkAsRepliedAndCustomer(seq, seqIdx)}
+                                disabled={
+                                  !sentLeadByKey[leadKey] ||
+                                  !!markingCustomerByLeadKey[leadKey] ||
+                                  !!customerMarkedByLeadKey[leadKey]
+                                }
+                                className="btn-ghost flex items-center gap-2 text-xs disabled:opacity-50"
+                                title={
+                                  sentLeadByKey[leadKey]
+                                    ? 'Mark as replied and add to customers'
+                                    : 'Send the email first to enable mark as replied'
+                                }
+                              >
+                                <User className="w-3.5 h-3.5" />
+                                {customerMarkedByLeadKey[leadKey]
+                                  ? 'Added to Customers'
+                                  : markingCustomerByLeadKey[leadKey]
+                                  ? 'Marking...'
+                                  : 'Mark as Replied'}
+                              </button>
                             </div>
+                            {customerMarkedByLeadKey[leadKey]?.marked_at && (
+                              <div className="text-xs text-success font-mono">
+                                Marked as customer at {fmt.datetime(customerMarkedByLeadKey[leadKey].marked_at)}
+                              </div>
+                            )}
                             {refineExplanationByEmail[`${leadKey}-${emailIdx}`] && (
                               <div className="text-xs text-muted leading-relaxed bg-void border border-border rounded-md px-2 py-1.5">
                                 AI note: {refineExplanationByEmail[`${leadKey}-${emailIdx}`]}
@@ -1352,6 +1478,8 @@ function EntriesTab() {
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState('')
   const [companyFilter, setCompanyFilter] = useState('')
+  const [addingCustomerId, setAddingCustomerId] = useState('')
+  const [addedCustomerByEntryId, setAddedCustomerByEntryId] = useState({})
   
   useEffect(() => {
     fetchEntries()
@@ -1376,6 +1504,40 @@ function EntriesTab() {
       toast.success('Status updated')
     } catch (e) {
       toast.error('Failed to update status')
+    }
+  }
+
+  async function addAsCustomer(entry) {
+    if (!entry || entry.status !== 'replied') {
+      toast.error('Only replied entries can be added as customers.')
+      return
+    }
+
+    const contactName = window.prompt('Contact name (optional):', '')
+    if (contactName === null) return
+    const contactEmail = window.prompt('Contact email (optional):', '')
+    if (contactEmail === null) return
+    const notes = window.prompt('Notes (optional):', '')
+    if (notes === null) return
+
+    setAddingCustomerId(entry.id)
+    try {
+      const payload = {
+        contact_name: (contactName || '').trim() || null,
+        contact_email: (contactEmail || '').trim() || null,
+        notes: (notes || '').trim() || null,
+      }
+      const response = await api.addCustomerFromEntry(entry.id, payload)
+      setAddedCustomerByEntryId(prev => ({ ...prev, [entry.id]: true }))
+      if (response?.created) {
+        toast.success('Customer created from replied entry')
+      } else {
+        toast.success('Customer already exists for this replied entry')
+      }
+    } catch (e) {
+      toast.error(e.message || 'Failed to create customer')
+    } finally {
+      setAddingCustomerId('')
     }
   }
 
@@ -1423,6 +1585,24 @@ function EntriesTab() {
                     <p className="text-xs text-text-dim leading-relaxed line-clamp-3 bg-void p-2 rounded border border-border custom-scrollbar overflow-y-auto max-h-24">
                         {entry.message}
                     </p>
+                 )}
+
+                 {entry.status === 'replied' && (
+                   <div className="flex items-center justify-between gap-2">
+                     <button
+                       type="button"
+                       onClick={() => addAsCustomer(entry)}
+                       disabled={addingCustomerId === entry.id || !!addedCustomerByEntryId[entry.id]}
+                       className="btn-ghost text-xs disabled:opacity-50"
+                     >
+                       {addedCustomerByEntryId[entry.id]
+                         ? 'Added as Customer'
+                         : addingCustomerId === entry.id
+                         ? 'Adding Customer...'
+                         : 'Add as Customer'}
+                     </button>
+                     <span className="text-[10px] text-muted font-mono">Replied lead</span>
+                   </div>
                  )}
                  
                  <div className="mt-auto pt-3 border-t border-border flex items-center justify-between">

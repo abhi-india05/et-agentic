@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Request, Response
 
 from backend.agents.orchestrator import run_orchestrator
 from backend.auth.deps import AuthUser, get_current_user
-from backend.deps import get_session_repo, get_outreach_entry_repo
+from backend.deps import get_customer_repo, get_outreach_entry_repo, get_session_repo
 from backend.models.schemas import (
     ChurnPredictionRequest,
     OutreachRequest,
@@ -15,6 +15,7 @@ from backend.models.schemas import (
     OutreachEntry,
     OutreachEntryStatus
 )
+from backend.repositories.customers import CustomerRepository
 from backend.repositories.sessions import SessionRepository
 from backend.repositories.outreach_entries import OutreachEntryRepository
 from backend.utils.errors import APIError
@@ -22,6 +23,48 @@ from backend.utils.helpers import generate_session_id, now_iso, utcnow
 from backend.utils.logger import bind_context
 
 router = APIRouter(tags=["workflows"])
+
+
+async def _load_customer_engagement_signals(
+    *,
+    user_id: str,
+    customer_repo: CustomerRepository,
+    max_customers: int = 1000,
+) -> list[Dict[str, Any]]:
+    page = 1
+    page_size = 200
+    signals: list[Dict[str, Any]] = []
+
+    while len(signals) < max_customers:
+        items, _total = await customer_repo.list_customers(
+            user_id=user_id,
+            page=page,
+            page_size=page_size,
+            query=None,
+        )
+        if not items:
+            break
+
+        for customer in items:
+            serialized = customer.model_dump(mode="json")
+            signals.append(
+                {
+                    "customer_id": serialized.get("id"),
+                    "company_name": serialized.get("company_name"),
+                    "contact_email": serialized.get("contact_email"),
+                    "marked_as_customer_at": serialized.get("marked_as_customer_at") or serialized.get("created_at"),
+                    "source_outreach_status": serialized.get("source_outreach_status"),
+                    "client_response": serialized,
+                }
+            )
+            if len(signals) >= max_customers:
+                break
+
+        if len(items) < page_size:
+            break
+        page += 1
+
+    return signals
 
 async def _run_workflow(
     *,
@@ -133,11 +176,17 @@ async def detect_risk(
     response: Response,
     user: AuthUser = Depends(get_current_user),
     session_repo: SessionRepository = Depends(get_session_repo),
+    customer_repo: CustomerRepository = Depends(get_customer_repo),
 ) -> Dict[str, Any]:
+    customer_engagement_signals = await _load_customer_engagement_signals(
+        user_id=user.user_id,
+        customer_repo=customer_repo,
+    )
     workflow_input = {
         "deal_ids": payload.deal_ids,
         "check_all": payload.check_all,
         "inactivity_threshold_days": payload.inactivity_threshold_days,
+        "customer_engagement_signals": customer_engagement_signals,
     }
     return await _run_workflow(
         task_type="risk_detection",
@@ -156,10 +205,16 @@ async def predict_churn(
     response: Response,
     user: AuthUser = Depends(get_current_user),
     session_repo: SessionRepository = Depends(get_session_repo),
+    customer_repo: CustomerRepository = Depends(get_customer_repo),
 ) -> Dict[str, Any]:
+    customer_engagement_signals = await _load_customer_engagement_signals(
+        user_id=user.user_id,
+        customer_repo=customer_repo,
+    )
     workflow_input = {
         "account_ids": payload.account_ids,
         "top_n": payload.top_n,
+        "customer_engagement_signals": customer_engagement_signals,
     }
     return await _run_workflow(
         task_type="churn_prediction",

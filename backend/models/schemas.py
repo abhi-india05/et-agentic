@@ -484,3 +484,136 @@ class OutreachEntry(StrictBaseModel):
 
 class OutreachEntryStatusUpdate(StrictBaseModel):
     status: OutreachEntryStatus
+
+
+class Customer(StrictBaseModel):
+    id: str
+    user_id: str
+    company_name: str
+    company_domain: Optional[str] = None
+    contact_name: Optional[str] = None
+    contact_email: Optional[str] = None
+    notes: Optional[str] = None
+    source_entry_id: Optional[str] = None
+    source_outreach_status: Optional[OutreachEntryStatus] = None
+    marked_as_customer_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+    @field_validator("company_name")
+    @classmethod
+    def _company_name(cls, value: str) -> str:
+        cleaned = sanitize_text(value, max_len=255)
+        if not cleaned:
+            raise ValueError("company_name is required")
+        return cleaned
+
+    @field_validator("company_domain")
+    @classmethod
+    def _company_domain(cls, value: Optional[str]) -> Optional[str]:
+        return sanitize_text(value, max_len=500)
+
+    @field_validator("contact_name")
+    @classmethod
+    def _contact_name(cls, value: Optional[str]) -> Optional[str]:
+        return sanitize_text(value, max_len=120)
+
+    @field_validator("contact_email")
+    @classmethod
+    def _contact_email(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip().lower()
+        if not cleaned:
+            return None
+        if not EMAIL_RE.match(cleaned):
+            raise ValueError("Invalid contact_email address")
+        return cleaned
+
+    @field_validator("notes")
+    @classmethod
+    def _notes(cls, value: Optional[str]) -> Optional[str]:
+        return sanitize_text(value, max_len=5000)
+
+    @field_validator("source_entry_id")
+    @classmethod
+    def _source_entry_id(cls, value: Optional[str]) -> Optional[str]:
+        return sanitize_text(value, max_len=120)
+
+
+class CustomerCreateRequest(StrictBaseModel):
+    company_name: str
+    company_domain: Optional[str] = None
+    contact_name: Optional[str] = None
+    contact_email: Optional[str] = None
+    notes: Optional[str] = None
+    source_entry_id: Optional[str] = None
+    source_outreach_status: Optional[OutreachEntryStatus] = None
+
+    @field_validator("company_name")
+    @classmethod
+    def _company_name(cls, value: str) -> str:
+        cleaned = sanitize_text(value, max_len=255)
+        if not cleaned:
+            raise ValueError("company_name is required")
+        return cleaned
+
+    @field_validator("company_domain")
+    @classmethod
+    def _company_domain(cls, value: Optional[str]) -> Optional[str]:
+        return sanitize_text(value, max_len=500)
+
+    @field_validator("contact_name")
+    @classmethod
+    def _contact_name(cls, value: Optional[str]) -> Optional[str]:
+        return sanitize_text(value, max_len=120)
+
+    @field_validator("contact_email")
+    @classmethod
+    def _contact_email(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip().lower()
+        if not cleaned:
+            return None
+        if not EMAIL_RE.match(cleaned):
+            raise ValueError("Invalid contact_email address")
+        return cleaned
+
+    @field_validator("notes")
+    @classmethod
+    def _notes(cls, value: Optional[str]) -> Optional[str]:
+        return sanitize_text(value, max_len=5000)
+
+    @field_validator("source_entry_id")
+    @classmethod
+    def _source_entry_id(cls, value: Optional[str]) -> Optional[str]:
+        return sanitize_text(value, max_len=120)
+
+
+class CustomerCreateFromEntryRequest(StrictBaseModel):
+    contact_name: Optional[str] = None
+    contact_email: Optional[str] = None
+    notes: Optional[str] = None
+
+    @field_validator("contact_name")
+    @classmethod
+    def _contact_name(cls, value: Optional[str]) -> Optional[str]:
+        return sanitize_text(value, max_len=120)
+
+    @field_validator("contact_email")
+    @classmethod
+    def _contact_email(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip().lower()
+        if not cleaned:
+            return None
+        if not EMAIL_RE.match(cleaned):
+            raise ValueError("Invalid contact_email address")
+        return cleaned
+
+    @field_validator("notes")
+    @classmethod
+    def _notes(cls, value: Optional[str]) -> Optional[str]:
+        return sanitize_text(value, max_len=5000)

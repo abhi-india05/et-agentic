@@ -4,6 +4,7 @@ import ProtectedRoute from './components/ProtectedRoute.jsx'
 import Sidebar from './components/Sidebar.jsx'
 import { AuthProvider, useAuth } from './context/AuthContext.jsx'
 import ChurnPage from './pages/ChurnPage.jsx'
+import ClientsPage from './pages/ClientsPage.jsx'
 import EmailsPage from './pages/EmailsPage.jsx'
 import LoginPage from './pages/LoginPage.jsx'
 import LogsPage from './pages/LogsPage.jsx'
@@ -93,6 +94,16 @@ function AppRoutes() {
           <ProtectedRoute>
             <AppShell>
               <PipelinePage />
+            </AppShell>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/clients"
+        element={
+          <ProtectedRoute>
+            <AppShell>
+              <ClientsPage />
             </AppShell>
           </ProtectedRoute>
         }

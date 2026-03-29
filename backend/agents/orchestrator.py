@@ -314,6 +314,7 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
             {
                 "deal_ids": input_data.get("deal_ids"),
                 "inactivity_threshold": input_data.get("inactivity_threshold_days", 10),
+                "customer_engagement_signals": input_data.get("customer_engagement_signals", []),
                 "session_id": session_id,
                 "user_id": user_id,
             },
@@ -362,6 +363,7 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
             {
                 "account_ids": input_data.get("account_ids"),
                 "top_n": input_data.get("top_n", 3),
+                "customer_engagement_signals": input_data.get("customer_engagement_signals", []),
                 "session_id": session_id,
                 "user_id": user_id,
             },

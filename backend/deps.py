@@ -6,6 +6,7 @@ from backend.db.mongo import get_database
 from backend.repositories.refresh_tokens import MongoRefreshTokenRepository, RefreshTokenRepository
 from backend.repositories.sessions import MongoSessionRepository, SessionRepository
 from backend.repositories.users import MongoUserRepository, UserRepository
+from backend.repositories.customers import MongoCustomerRepository, CustomerRepository
 from backend.repositories.outreach_entries import MongoOutreachEntryRepository, OutreachEntryRepository
 
 
@@ -30,3 +31,8 @@ def get_refresh_token_repo() -> RefreshTokenRepository:
 @lru_cache(maxsize=1)
 def get_outreach_entry_repo() -> OutreachEntryRepository:
     return MongoOutreachEntryRepository(get_database())
+
+
+@lru_cache(maxsize=1)
+def get_customer_repo() -> CustomerRepository:
+    return MongoCustomerRepository(get_database())
