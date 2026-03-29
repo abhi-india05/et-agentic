@@ -116,7 +116,7 @@ function SelectedLeadSourceCard({ lead }) {
   )
 }
 
-function LeadCard({ lead, sequence }) {
+function LeadCard({ lead, sequence, twin }) {
   const linkedinUrl = lead.linkedin_url || lead.linkedin
   return (
     <div className="card space-y-4">
@@ -157,6 +157,23 @@ function LeadCard({ lead, sequence }) {
         </div>
       )}
 
+      {twin && (
+        <div>
+          <div className="text-xs text-muted mb-1.5">Twin Enrichment</div>
+          <div className="flex flex-wrap gap-1.5">
+            {twin.buying_style && (
+              <span className="text-xs bg-info/10 border border-info/30 text-info px-2 py-0.5 rounded font-mono">Style: {twin.buying_style}</span>
+            )}
+            {twin.recommended_tone && (
+              <span className="text-xs bg-accent/10 border border-accent/30 text-accent px-2 py-0.5 rounded font-mono">Tone: {twin.recommended_tone}</span>
+            )}
+            {twin.risk_perception && (
+              <span className="text-xs bg-danger/10 border border-danger/30 text-danger px-2 py-0.5 rounded font-mono">Risk: {twin.risk_perception}</span>
+            )}
+          </div>
+        </div>
+      )}
+
       {sequence && (
         <div>
           <div className="text-xs text-muted font-mono uppercase tracking-wider mb-3">Email Sequence</div>
@@ -180,6 +197,14 @@ function LeadCard({ lead, sequence }) {
 function DigitalTwinCard({ twin, lead }) {
   const leadName = lead?.name || twin?.buyer_name || 'Unknown lead'
   const leadRole = lead?.title || twin?.buyer_title || 'Unknown role'
+  const personaSummary = twin?.persona_summary || twin?.opening_hook || 'No persona summary available'
+  const inferredPriorities = Array.isArray(twin?.inferred_priorities)
+    ? twin.inferred_priorities
+    : (Array.isArray(twin?.primary_motivations) ? twin.primary_motivations : [])
+  const extractedSignals = Array.isArray(twin?.signals_extracted)
+    ? twin.signals_extracted
+    : (Array.isArray(twin?.decision_criteria) ? twin.decision_criteria : [])
+  const hasConfidence = typeof twin?.confidence_score === 'number'
 
   return (
     <div className="card space-y-3">
@@ -188,14 +213,40 @@ function DigitalTwinCard({ twin, lead }) {
           <div className="font-display font-700 text-text">{leadName}</div>
           <div className="text-xs text-muted mt-1">{leadRole}</div>
         </div>
-        <div className="text-xs text-muted font-mono">Confidence: {fmt.pct(twin?.confidence_score || 0)}</div>
+        {hasConfidence && (
+          <div className="text-xs text-muted font-mono">Confidence: {fmt.pct(twin.confidence_score)}</div>
+        )}
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-        <div><span className="text-muted">Buying Style:</span> <span className="text-text font-mono">{twin?.buying_style || 'N/A'}</span></div>
-        <div><span className="text-muted">Risk:</span> <span className="text-text font-mono">{twin?.risk_perception || 'N/A'}</span></div>
-        <div><span className="text-muted">Timeline:</span> <span className="text-text font-mono">{twin?.estimated_decision_timeline || 'N/A'}</span></div>
-        <div><span className="text-muted">Tone:</span> <span className="text-text font-mono">{twin?.recommended_tone || 'N/A'}</span></div>
+      <div className="space-y-1">
+        <div className="text-xs text-muted uppercase tracking-wider font-mono">Persona Summary</div>
+        <div className="text-xs text-text-dim leading-relaxed">{personaSummary}</div>
+      </div>
+
+      <div className="space-y-1">
+        <div className="text-xs text-muted uppercase tracking-wider font-mono">Inferred Priorities</div>
+        {inferredPriorities.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {inferredPriorities.map((priority, idx) => (
+              <span key={idx} className="text-xs bg-accent/10 border border-accent/30 text-accent px-2 py-0.5 rounded font-mono">{priority}</span>
+            ))}
+          </div>
+        ) : (
+          <div className="text-xs text-text-dim">No inferred priorities available</div>
+        )}
+      </div>
+
+      <div className="space-y-1">
+        <div className="text-xs text-muted uppercase tracking-wider font-mono">Signals Extracted</div>
+        {extractedSignals.length > 0 ? (
+          <ul className="space-y-1">
+            {extractedSignals.map((signal, idx) => (
+              <li key={idx} className="text-xs text-text-dim leading-relaxed">• {signal}</li>
+            ))}
+          </ul>
+        ) : (
+          <div className="text-xs text-text-dim">No extracted signals available</div>
+        )}
       </div>
 
       {twin?.top_objections?.length > 0 && (
@@ -632,97 +683,9 @@ function LogsTab({ sessionId }) {
             </div>
           )}
 
-          {!form.auto_send && draftSequences.length > 0 && (
-            <div className="card space-y-4 border-accent/25 bg-accent/5">
-              <div>
-                <div className="text-sm font-display font-700 text-text">Review Before Send (Human-in-the-loop)</div>
-                <div className="text-xs text-muted mt-1">Edit sender and message content before delivery.</div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs text-muted font-mono block mb-1.5">Sender Name</label>
-                  <input
-                    type="text"
-                    value={sender.from_name}
-                    onChange={e => setSender({ ...sender, from_name: e.target.value })}
-                    className="w-full bg-void border border-border rounded-lg px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-muted font-mono block mb-1.5">Sender Email</label>
-                  <input
-                    type="email"
-                    value={sender.from_email}
-                    onChange={e => setSender({ ...sender, from_email: e.target.value })}
-                    className="w-full bg-void border border-border rounded-lg px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                {draftSequences.map((seq, seqIdx) => {
-                  const leadKey = getLeadKey(seq, seqIdx)
-                  return (
-                    <div key={seq.sequence_id || seqIdx} className="border border-border rounded-lg p-3 space-y-3 bg-panel">
-                      <div className="text-xs text-muted font-mono">
-                        {seq.lead_name || 'Lead'} · {seq.lead_email || 'no-email'}
-                      </div>
-                      <div>
-                        <label className="text-xs text-muted font-mono block mb-1.5">Recipient Email</label>
-                        <input
-                          type="email"
-                          value={editedEmails[leadKey] ?? seq.lead_email ?? ''}
-                          onChange={e => updateRecipientEmail(leadKey, e.target.value)}
-                          placeholder="Enter recipient email"
-                          className={`w-full bg-void border rounded-lg px-3 py-2 text-sm text-text focus:border-accent focus:outline-none ${emailErrors[leadKey] ? 'border-danger' : 'border-border'}`}
-                        />
-                        {emailErrors[leadKey] && (
-                          <div className="text-xs text-danger font-mono mt-1">{emailErrors[leadKey]}</div>
-                        )}
-                      </div>
-                      {seq.emails.map((email, emailIdx) => (
-                        <div key={emailIdx} className="space-y-2 border-t border-border pt-2">
-                          <div className="text-xs text-muted font-mono">Email #{emailIdx + 1}</div>
-                          <input
-                            type="text"
-                            value={email.subject}
-                            onChange={e => updateDraftEmail(seqIdx, emailIdx, 'subject', e.target.value)}
-                            className="w-full bg-void border border-border rounded-lg px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
-                          />
-                          <textarea
-                            value={email.body}
-                            onChange={e => updateDraftEmail(seqIdx, emailIdx, 'body', e.target.value)}
-                            rows={5}
-                            className="w-full bg-void border border-border rounded-lg px-3 py-2 text-sm text-text focus:border-accent focus:outline-none resize-y font-mono"
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  )
-                })}
-              </div>
-
-              <button
-                onClick={handleSendReviewed}
-                disabled={sendingDrafts}
-                className="btn-primary flex items-center gap-2 disabled:opacity-50"
-              >
-                <Mail className="w-4 h-4" />
-                {sendingDrafts ? 'Sending reviewed drafts…' : 'Send Reviewed Emails'}
-              </button>
-
-              {sendSummary && (
-                <div className="text-xs text-success font-mono">
-                  Sent: {sendSummary.sent || 0} · Failed: {sendSummary.failed || 0} · Sequences: {sendSummary.total_sequences || 0}
-                </div>
-              )}
-            </div>
-          )}
-
           {leads.length > 0 && (
             <div className="space-y-4">
-              <SectionHeader title="Selected Leads (Source Data)" subtitle="LinkedIn source details used for prospecting and outreach" />
+              <SectionHeader title="Selected Leads" subtitle="Raw LinkedIn leads returned by the prospecting stage" />
               <div className="max-h-[34rem] overflow-y-auto pr-1 custom-scrollbar space-y-3">
                 {leads.map((lead, i) => (
                   <SelectedLeadSourceCard
@@ -734,22 +697,9 @@ function LogsTab({ sessionId }) {
             </div>
           )}
 
-          {leads.length > 0 && (
-            <div className="space-y-4">
-              <SectionHeader title={`${leads.length} Qualified Leads`} subtitle={`ICP fit: ${fmt.pct(prospectData.icp_fit_score)}`} />
-              {leads.map((lead, i) => (
-                <LeadCard
-                  key={lead.id || i}
-                  lead={lead}
-                  sequence={sequences[i]}
-                />
-              ))}
-            </div>
-          )}
-
           {twins.length > 0 && (
             <div className="space-y-4">
-              <SectionHeader title="Digital Twin Agent" subtitle="Buyer behavior, objections, and tone recommendations" />
+              <SectionHeader title="Digital Twin Insights" subtitle="Persona and behavioral insights from the digital twin agent" />
               {twins.map((twin, i) => (
                 <DigitalTwinCard
                   key={leads[i]?.id || twin?.buyer_name || i}
@@ -757,6 +707,111 @@ function LogsTab({ sessionId }) {
                   lead={leads[i]}
                 />
               ))}
+            </div>
+          )}
+
+          {leads.length > 0 && (
+            <div className="space-y-4">
+              <SectionHeader title="Qualified Leads" subtitle={`${leads.length} leads · ICP fit: ${fmt.pct(prospectData.icp_fit_score)}`} />
+              {leads.map((lead, i) => (
+                <LeadCard
+                  key={lead.id || i}
+                  lead={lead}
+                  sequence={sequences[i]}
+                  twin={twins[i]}
+                />
+              ))}
+            </div>
+          )}
+
+          {!form.auto_send && draftSequences.length > 0 && (
+            <div className="space-y-4">
+              <SectionHeader title="Review Before Sending" subtitle="Human-in-the-loop final review and recipient control" />
+              <div className="card space-y-4 border-accent/25 bg-accent/5">
+                <div>
+                  <div className="text-sm font-display font-700 text-text">Review Before Send (Human-in-the-loop)</div>
+                  <div className="text-xs text-muted mt-1">Edit sender, recipient email, and message content before delivery.</div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-muted font-mono block mb-1.5">Sender Name</label>
+                    <input
+                      type="text"
+                      value={sender.from_name}
+                      onChange={e => setSender({ ...sender, from_name: e.target.value })}
+                      className="w-full bg-void border border-border rounded-lg px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted font-mono block mb-1.5">Sender Email</label>
+                    <input
+                      type="email"
+                      value={sender.from_email}
+                      onChange={e => setSender({ ...sender, from_email: e.target.value })}
+                      className="w-full bg-void border border-border rounded-lg px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  {draftSequences.map((seq, seqIdx) => {
+                    const leadKey = getLeadKey(seq, seqIdx)
+                    return (
+                      <div key={seq.sequence_id || seqIdx} className="border border-border rounded-lg p-3 space-y-3 bg-panel">
+                        <div className="text-xs text-muted font-mono">
+                          {seq.lead_name || 'Lead'} · {seq.lead_email || 'no-email'}
+                        </div>
+                        <div>
+                          <label className="text-xs text-muted font-mono block mb-1.5">Recipient Email</label>
+                          <input
+                            type="email"
+                            value={editedEmails[leadKey] ?? seq.lead_email ?? ''}
+                            onChange={e => updateRecipientEmail(leadKey, e.target.value)}
+                            placeholder="Enter recipient email"
+                            className={`w-full bg-void border rounded-lg px-3 py-2 text-sm text-text focus:border-accent focus:outline-none ${emailErrors[leadKey] ? 'border-danger' : 'border-border'}`}
+                          />
+                          {emailErrors[leadKey] && (
+                            <div className="text-xs text-danger font-mono mt-1">{emailErrors[leadKey]}</div>
+                          )}
+                        </div>
+                        {seq.emails.map((email, emailIdx) => (
+                          <div key={emailIdx} className="space-y-2 border-t border-border pt-2">
+                            <div className="text-xs text-muted font-mono">Email #{emailIdx + 1}</div>
+                            <input
+                              type="text"
+                              value={email.subject}
+                              onChange={e => updateDraftEmail(seqIdx, emailIdx, 'subject', e.target.value)}
+                              className="w-full bg-void border border-border rounded-lg px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
+                            />
+                            <textarea
+                              value={email.body}
+                              onChange={e => updateDraftEmail(seqIdx, emailIdx, 'body', e.target.value)}
+                              rows={5}
+                              className="w-full bg-void border border-border rounded-lg px-3 py-2 text-sm text-text focus:border-accent focus:outline-none resize-y font-mono"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  })}
+                </div>
+
+                <button
+                  onClick={handleSendReviewed}
+                  disabled={sendingDrafts}
+                  className="btn-primary flex items-center gap-2 disabled:opacity-50"
+                >
+                  <Mail className="w-4 h-4" />
+                  {sendingDrafts ? 'Sending reviewed drafts…' : 'Send Reviewed Emails'}
+                </button>
+
+                {sendSummary && (
+                  <div className="text-xs text-success font-mono">
+                    Sent: {sendSummary.sent || 0} · Failed: {sendSummary.failed || 0} · Sequences: {sendSummary.total_sequences || 0}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
