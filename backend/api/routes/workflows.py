@@ -26,6 +26,7 @@ router = APIRouter(tags=["workflows"])
 async def _run_workflow(
     *,
     task_type: str,
+    orchestrator_task_type: Optional[str] = None,
     workflow_input: Dict[str, Any],
     request: Request,
     user: AuthUser,
@@ -45,7 +46,7 @@ async def _run_workflow(
     )
     try:
         result = await run_orchestrator(
-            task_type=task_type,
+            task_type=orchestrator_task_type or task_type,
             input_data=workflow_input,
             session_id=session_id,
             user_id=user.user_id,
@@ -54,6 +55,7 @@ async def _run_workflow(
             session_id=session_id,
             status=result.get("status", "completed"),
             plan=result.get("plan", {}),
+            final_output=result,
         )
         response.headers["X-Session-ID"] = session_id
         return {
@@ -94,7 +96,8 @@ async def run_outreach(
         "auto_send": payload.auto_send,
     }
     result = await _run_workflow(
-        task_type="cold_outreach",
+        task_type="outreach",
+        orchestrator_task_type="cold_outreach",
         workflow_input=workflow_input,
         request=request,
         user=user,

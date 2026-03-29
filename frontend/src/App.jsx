@@ -1,16 +1,17 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { Toaster } from 'react-hot-toast'
-import { AuthProvider, useAuth } from './context/AuthContext.jsx'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import ProtectedRoute from './components/ProtectedRoute.jsx'
 import Sidebar from './components/Sidebar.jsx'
-import Overview from './pages/Overview.jsx'
-import OutreachPage from './pages/OutreachPage.jsx'
-import RisksPage from './pages/RisksPage.jsx'
+import { AuthProvider, useAuth } from './context/AuthContext.jsx'
 import ChurnPage from './pages/ChurnPage.jsx'
-import PipelinePage from './pages/PipelinePage.jsx'
 import EmailsPage from './pages/EmailsPage.jsx'
-import LogsPage from './pages/LogsPage.jsx'
 import LoginPage from './pages/LoginPage.jsx'
+import LogsPage from './pages/LogsPage.jsx'
+import OutreachHistoryPage from './pages/OutreachHistoryPage.jsx'
+import OutreachPage from './pages/OutreachPage.jsx'
+import Overview from './pages/Overview.jsx'
+import PipelinePage from './pages/PipelinePage.jsx'
+import RisksPage from './pages/RisksPage.jsx'
 
 function AppRoutes() {
   const { isAuthed, authChecked } = useAuth()
@@ -32,6 +33,26 @@ function AppRoutes() {
           <ProtectedRoute>
             <AppShell>
               <Overview />
+            </AppShell>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/outreach/history"
+        element={
+          <ProtectedRoute>
+            <AppShell>
+              <OutreachHistoryPage />
+            </AppShell>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/outreach/:session_id"
+        element={
+          <ProtectedRoute>
+            <AppShell>
+              <OutreachPage />
             </AppShell>
           </ProtectedRoute>
         }

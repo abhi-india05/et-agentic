@@ -331,10 +331,12 @@ app.include_router(api_router)
 from backend.api.routes.auth import router as _auth_compat  # noqa: E402
 from backend.api.routes.workflows import router as _workflows_compat  # noqa: E402
 from backend.api.routes.admin import router as _admin_compat  # noqa: E402
+from backend.api.routes.outreach import router as _outreach_compat  # noqa: E402
 
 app.include_router(_auth_compat)
 app.include_router(_workflows_compat)
 app.include_router(_admin_compat)
+app.include_router(_outreach_compat, prefix="/outreach")
 
 
 # ---------------------------------------------------------------------------

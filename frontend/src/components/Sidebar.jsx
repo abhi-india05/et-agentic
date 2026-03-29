@@ -1,13 +1,21 @@
-import { NavLink } from 'react-router-dom'
 import {
-  LayoutDashboard, Zap, AlertTriangle, TrendingDown,
-  ScrollText, Mail, Activity, Cpu, LogOut
+  Activity,
+  AlertTriangle,
+  Cpu,
+  LayoutDashboard,
+  LogOut,
+  Mail,
+  ScrollText,
+  TrendingDown,
+  Zap
 } from 'lucide-react'
+import { NavLink } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext.jsx'
 
 const NAV = [
   { to: '/', icon: LayoutDashboard, label: 'Overview' },
   { to: '/outreach', icon: Zap, label: 'Cold Outreach' },
+  { to: '/outreach/history', icon: ScrollText, label: 'Outreach History' },
   { to: '/risks', icon: AlertTriangle, label: 'Deal Risks' },
   { to: '/churn', icon: TrendingDown, label: 'Churn Intel' },
   { to: '/pipeline', icon: Activity, label: 'Pipeline' },

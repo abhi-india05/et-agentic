@@ -1,6 +1,7 @@
-import { ChevronDown, ChevronUp, ExternalLink, Mail, User, Zap } from 'lucide-react'
+import { ChevronDown, ChevronUp, ExternalLink, History, Mail, Play, RotateCcw, User, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
+import { useParams } from 'react-router-dom'
 import AgentFlow from '../components/AgentFlow.jsx'
 import { AgentTag, ErrorState, LoadingState, SectionHeader } from '../components/UI.jsx'
 import { api } from '../services/api.js'
@@ -129,8 +130,8 @@ function LeadCard({ lead, twin, sequence }) {
   )
 }
 
-function LogsTab() {
-  const [form, setForm] = useState({
+function LogsTab({ sessionId }) {
+  const defaultForm = {
     company: '',
     industry: 'SaaS',
     size: '51-200',
@@ -139,8 +140,10 @@ function LogsTab() {
     product_description: '',
     notes: '',
     auto_send: false,
-  })
+  }
+  const [form, setForm] = useState(defaultForm)
   const [loading, setLoading] = useState(false)
+  const [hydratingSession, setHydratingSession] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
   const [draftSequences, setDraftSequences] = useState([])
@@ -148,30 +151,74 @@ function LogsTab() {
   const [sendingDrafts, setSendingDrafts] = useState(false)
   const [sendSummary, setSendSummary] = useState(null)
 
-  async function handleSubmit(e) {
-    e.preventDefault()
-    if (!form.company.trim()) return
-    setLoading(true)
-    setResult(null)
-    setError(null)
-    setSendSummary(null)
-    try {
-      const payload = { ...form }
-      if (payload.website && !payload.website.startsWith('http')) {
-        payload.website = 'https://' + payload.website
-      }
-      Object.keys(payload).forEach(k => {
-        if (payload[k] === '') payload[k] = null
-      })
-      const res = await api.runOutreach(payload)
-      setResult(res)
-      toast.success('Outreach campaign launched successfully')
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setLoading(false)
+  useEffect(() => {
+    if (!sessionId) {
+      setHydratingSession(false)
+      setError(null)
+      setResult(null)
+      setForm(defaultForm)
+      return
     }
-  }
+
+    let cancelled = false
+
+    async function loadSession() {
+      setHydratingSession(true)
+      setError(null)
+      try {
+        const session = await api.outreachSession(sessionId)
+        if (cancelled) return
+
+        const input = session.input_data || {}
+        const productContext = typeof input.product_context === 'object' && input.product_context !== null
+          ? input.product_context
+          : {}
+
+        setForm({
+          company: input.company || '',
+          industry: input.industry || 'SaaS',
+          size: input.size || '51-200',
+          website: input.website || '',
+          product_name: input.product_name || productContext.name || '',
+          product_description: input.product_description || productContext.description || '',
+          notes: input.notes || '',
+          auto_send: Boolean(input.auto_send),
+        })
+
+        const fallbackFinalOutput = {
+          session_id: session.session_id,
+          status: session.status,
+          plan: session.plan || {},
+          agent_outputs: session.agent_outputs || {},
+          completed_agents: [],
+          failed_agents: [],
+          explanation: {},
+        }
+        const hydratedFinalOutput = session.final_output && typeof session.final_output === 'object'
+          ? session.final_output
+          : fallbackFinalOutput
+
+        setResult({
+          session_id: session.session_id,
+          task_type: hydratedFinalOutput.task_type || 'outreach',
+          status: session.status || hydratedFinalOutput.status || 'completed',
+          data: hydratedFinalOutput,
+        })
+      } catch (e) {
+        if (cancelled) return
+        setError(e.message)
+      } finally {
+        if (!cancelled) {
+          setHydratingSession(false)
+        }
+      }
+    }
+
+    loadSession()
+    return () => {
+      cancelled = true
+    }
+  }, [sessionId])
 
   const agentOutputs = result?.data?.agent_outputs || {}
   const completedAgents = result?.data?.completed_agents || []
@@ -203,6 +250,37 @@ function LogsTab() {
       }))
     )
   }, [sequences])
+
+  async function runWorkflow({ clearExisting } = { clearExisting: true }) {
+    if (!form.company.trim()) return
+    setLoading(true)
+    if (clearExisting) {
+      setResult(null)
+    }
+    setError(null)
+    setSendSummary(null)
+    try {
+      const payload = { ...form }
+      if (payload.website && !payload.website.startsWith('http')) {
+        payload.website = 'https://' + payload.website
+      }
+      Object.keys(payload).forEach(k => {
+        if (payload[k] === '') payload[k] = null
+      })
+      const res = await api.runOutreach(payload)
+      setResult(res)
+      toast.success(sessionId ? 'Workflow continued successfully' : 'Outreach campaign launched successfully')
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    await runWorkflow({ clearExisting: true })
+  }
 
   function updateDraftEmail(seqIdx, emailIdx, field, value) {
     setDraftSequences((prev) =>
@@ -253,6 +331,36 @@ function LogsTab() {
         title="Cold Outreach"
         subtitle="AI-powered prospecting and personalized email sequence generation"
       />
+
+      {sessionId && (
+        <div className="card border-accent/25 bg-accent/5 space-y-3">
+          <div className="flex items-center gap-2 text-sm font-display font-700 text-text">
+            <History className="w-4 h-4 text-accent" />
+            Resumed Session
+          </div>
+          <div className="text-xs text-muted font-mono break-all">{sessionId}</div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => runWorkflow({ clearExisting: false })}
+              disabled={loading || hydratingSession}
+              className="btn-primary flex items-center gap-2 disabled:opacity-50"
+            >
+              <Play className="w-4 h-4" />
+              Continue Workflow
+            </button>
+            <button
+              type="button"
+              onClick={() => runWorkflow({ clearExisting: true })}
+              disabled={loading || hydratingSession}
+              className="btn-ghost flex items-center gap-2 disabled:opacity-50"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Regenerate
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -338,13 +446,14 @@ function LogsTab() {
             />
             Auto-send immediately after generation (disable for human review)
           </label>
-          <button type="submit" disabled={loading} className="btn-primary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+          <button type="submit" disabled={loading || hydratingSession} className="btn-primary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
             <Zap className="w-4 h-4" />
-            {loading ? 'Running agents…' : 'Launch Outreach Campaign'}
+            {loading ? 'Running agents…' : sessionId ? 'Run Workflow From Loaded Session' : 'Launch Outreach Campaign'}
           </button>
         </form>
       </div>
 
+      {hydratingSession && <LoadingState message="Loading saved outreach workflow..." />}
       {loading && <LoadingState message="Orchestrating prospecting → digital twin → outreach agents…" />}
       {error && <ErrorState message={error} />}
 
@@ -565,7 +674,12 @@ function EntriesTab() {
 }
 
 export default function OutreachPage() {
+  const { session_id } = useParams()
   const [tab, setTab] = useState('logs')
+
+  useEffect(() => {
+    setTab('logs')
+  }, [session_id])
   
   return (
     <div className="space-y-6 animate-fade-up">
@@ -584,7 +698,7 @@ export default function OutreachPage() {
         </button>
       </div>
       
-      {tab === 'logs' ? <LogsTab /> : <EntriesTab />}
+      {tab === 'logs' ? <LogsTab sessionId={session_id} /> : <EntriesTab />}
     </div>
   )
 }

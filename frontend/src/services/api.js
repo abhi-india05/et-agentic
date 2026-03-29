@@ -148,6 +148,17 @@ export const api = {
   sendSequences: (body) =>
     request('/send-sequences', { method: 'POST', body: JSON.stringify(body) }),
 
+  // --- Outreach Sessions (history / resume) ---
+  outreachSessions: ({ page = 1, pageSize = 50 } = {}) => {
+    const params = new URLSearchParams()
+    params.set('page', String(page))
+    params.set('page_size', String(pageSize))
+    return request(`/outreach/sessions?${params.toString()}`)
+  },
+
+  outreachSession: (sessionId) =>
+    request(`/outreach/sessions/${encodeURIComponent(sessionId)}`),
+
   // --- Outreach Entries ---
   outreachEntries: ({ page = 1, pageSize = 50, status, company, } = {}) => {
     const params = new URLSearchParams()

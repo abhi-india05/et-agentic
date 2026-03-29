@@ -1,6 +1,6 @@
 ﻿from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -22,10 +22,12 @@ class SessionInDB:
     updated_at: object
     completed_at: Optional[object] = None
     error: Optional[str] = None
+    final_output: Dict[str, Any] = field(default_factory=dict)
 
 
 class SessionRepository(Protocol):
     async def ensure_indexes(self) -> None: ...
+    async def get_session(self, *, session_id: str) -> Optional[SessionInDB]: ...
     async def create_session(
         self,
         *,
@@ -43,6 +45,7 @@ class SessionRepository(Protocol):
         session_id: str,
         status: str,
         plan: Optional[Dict[str, Any]] = None,
+        final_output: Optional[Dict[str, Any]] = None,
         error: Optional[str] = None,
     ) -> Optional[SessionInDB]: ...
     async def list_sessions(
@@ -52,6 +55,7 @@ class SessionRepository(Protocol):
         page: int,
         page_size: int,
         status: Optional[str] = None,
+        task_type: Optional[str] = None,
         created_from: Optional[str] = None,
         created_to: Optional[str] = None,
     ) -> Tuple[List[SessionInDB], int, int]: ...
@@ -71,6 +75,7 @@ def _doc_to_session(doc: Dict[str, Any]) -> SessionInDB:
         updated_at=doc.get("updated_at") or now,
         completed_at=doc.get("completed_at"),
         error=doc.get("error"),
+        final_output=dict(doc.get("final_output", {})),
     )
 
 
@@ -112,9 +117,15 @@ class MongoSessionRepository:
             "updated_at": now,
             "completed_at": None,
             "error": None,
+            "final_output": {},
         }
         await self._col.insert_one(doc)
         return _doc_to_session(doc)
+
+    async def get_session(self, *, session_id: str) -> Optional[SessionInDB]:
+        await self.ensure_indexes()
+        doc = await self._col.find_one({"session_id": session_id}, {"_id": 0})
+        return _doc_to_session(doc) if doc else None
 
     async def update_session(
         self,
@@ -122,6 +133,7 @@ class MongoSessionRepository:
         session_id: str,
         status: str,
         plan: Optional[Dict[str, Any]] = None,
+        final_output: Optional[Dict[str, Any]] = None,
         error: Optional[str] = None,
     ) -> Optional[SessionInDB]:
         await self.ensure_indexes()
@@ -129,6 +141,8 @@ class MongoSessionRepository:
         patch: Dict[str, Any] = {"status": status, "updated_at": now}
         if plan is not None:
             patch["plan"] = plan
+        if final_output is not None:
+            patch["final_output"] = final_output
         if error is not None:
             patch["error"] = error
         if status in {"completed", "completed_with_errors", "failed"}:
@@ -147,6 +161,7 @@ class MongoSessionRepository:
         page: int,
         page_size: int,
         status: Optional[str] = None,
+        task_type: Optional[str] = None,
         created_from: Optional[str] = None,
         created_to: Optional[str] = None,
     ) -> Tuple[List[SessionInDB], int, int]:
@@ -154,6 +169,8 @@ class MongoSessionRepository:
         filters: Dict[str, Any] = {"owner_user_id": owner_user_id}
         if status:
             filters["status"] = status
+        if task_type:
+            filters["task_type"] = task_type
         from_dt = parse_date(created_from or "")
         to_dt = parse_date(created_to or "")
         created_at: Dict[str, Any] = {}
@@ -164,7 +181,10 @@ class MongoSessionRepository:
         if created_at:
             filters["created_at"] = created_at
         total = await self._col.count_documents(filters)
-        running = await self._col.count_documents({"owner_user_id": owner_user_id, "status": "running"})
+        running_filters: Dict[str, Any] = {"owner_user_id": owner_user_id, "status": "running"}
+        if task_type:
+            running_filters["task_type"] = task_type
+        running = await self._col.count_documents(running_filters)
         cursor = (
             self._col.find(filters, {"_id": 0})
             .sort("created_at", -1)
@@ -208,9 +228,13 @@ class InMemorySessionRepository:
             updated_at=now,
             completed_at=None,
             error=None,
+            final_output={},
         )
         self._sessions[session_id] = session
         return session
+
+    async def get_session(self, *, session_id: str) -> Optional[SessionInDB]:
+        return self._sessions.get(session_id)
 
     async def update_session(
         self,
@@ -218,6 +242,7 @@ class InMemorySessionRepository:
         session_id: str,
         status: str,
         plan: Optional[Dict[str, Any]] = None,
+        final_output: Optional[Dict[str, Any]] = None,
         error: Optional[str] = None,
     ) -> Optional[SessionInDB]:
         existing = self._sessions.get(session_id)
@@ -236,6 +261,7 @@ class InMemorySessionRepository:
             updated_at=now,
             completed_at=now if status in {"completed", "completed_with_errors", "failed"} else existing.completed_at,
             error=error if error is not None else existing.error,
+            final_output=final_output if final_output is not None else existing.final_output,
         )
         self._sessions[session_id] = updated
         return updated
@@ -247,6 +273,7 @@ class InMemorySessionRepository:
         page: int,
         page_size: int,
         status: Optional[str] = None,
+        task_type: Optional[str] = None,
         created_from: Optional[str] = None,
         created_to: Optional[str] = None,
     ) -> Tuple[List[SessionInDB], int, int]:
@@ -255,13 +282,23 @@ class InMemorySessionRepository:
         items = [session for session in self._sessions.values() if session.owner_user_id == owner_user_id]
         if status:
             items = [session for session in items if session.status == status]
+        if task_type:
+            items = [session for session in items if session.task_type == task_type]
         if from_dt:
             items = [session for session in items if session.created_at >= from_dt]
         if to_dt:
             items = [session for session in items if session.created_at <= to_dt]
         items.sort(key=lambda session: session.created_at, reverse=True)
         total = len(items)
-        running = len([session for session in self._sessions.values() if session.owner_user_id == owner_user_id and session.status == "running"])
+        running = len(
+            [
+                session
+                for session in self._sessions.values()
+                if session.owner_user_id == owner_user_id
+                and session.status == "running"
+                and (not task_type or session.task_type == task_type)
+            ]
+        )
         start = max(0, (page - 1) * page_size)
         end = start + page_size
         return items[start:end], total, running
