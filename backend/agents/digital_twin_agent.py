@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from typing import Any, Dict, List, Optional
@@ -52,11 +52,14 @@ def run_digital_twin_agent(
     company: str,
     industry: str,
     session_id: str,
-    user_id: Optional[str] = None,
+    user_id: str,
 ) -> Dict[str, Any]:
+    if not user_id:
+        raise ValueError("user_id is required")
+        
     logger.info("digital_twin_agent_start", company=company, session_id=session_id)
     memory = get_vector_store()
-    namespace = user_id or "global"
+    namespace = user_id
     prior_context = memory.get_context_for_company(company, namespace=namespace)
 
     twin_profiles: List[Dict[str, Any]] = []

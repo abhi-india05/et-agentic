@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from typing import Any, Dict, Optional
@@ -67,11 +67,14 @@ def run_prospecting_agent(
     company_size: str,
     session_id: str,
     notes: str = "",
-    user_id: Optional[str] = None,
+    user_id: str = None,
 ) -> Dict[str, Any]:
+    if not user_id:
+        raise ValueError("user_id is required")
+        
     logger.info("prospecting_agent_start", company=company, session_id=session_id)
     memory = get_vector_store()
-    namespace = user_id or "global"
+    namespace = user_id
 
     try:
         enriched = enrich_company(company, industry)

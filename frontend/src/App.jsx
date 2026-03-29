@@ -10,8 +10,6 @@ import ChurnPage from './pages/ChurnPage.jsx'
 import PipelinePage from './pages/PipelinePage.jsx'
 import EmailsPage from './pages/EmailsPage.jsx'
 import LogsPage from './pages/LogsPage.jsx'
-import ProductsPage from './pages/ProductsPage.jsx'
-import ProductDetailPage from './pages/ProductDetailPage.jsx'
 import LoginPage from './pages/LoginPage.jsx'
 
 function AppRoutes() {
@@ -74,26 +72,6 @@ function AppRoutes() {
           <ProtectedRoute>
             <AppShell>
               <PipelinePage />
-            </AppShell>
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/products"
-        element={
-          <ProtectedRoute>
-            <AppShell>
-              <ProductsPage />
-            </AppShell>
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/products/:productId"
-        element={
-          <ProtectedRoute>
-            <AppShell>
-              <ProductDetailPage />
             </AppShell>
           </ProtectedRoute>
         }

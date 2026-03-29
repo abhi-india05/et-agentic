@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any, Dict, List
 
@@ -13,7 +13,7 @@ from backend.utils.logger import get_logger, record_audit
 logger = get_logger("action_agent")
 
 
-def execute_send_sequence(sequences: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def execute_send_sequence(sequences: List[Dict[str, Any]], user_id: str) -> List[Dict[str, Any]]:
     email_client = get_email_client()
     results: List[Dict[str, Any]] = []
     for sequence in sequences:
@@ -37,6 +37,7 @@ def execute_send_sequence(sequences: List[Dict[str, Any]]) -> List[Dict[str, Any
             to_name=lead_name,
             emails=email_payloads,
             sequence_id=sequence_id,
+            user_id=user_id,
         )
         results.append(
             {
@@ -52,7 +53,7 @@ def execute_send_sequence(sequences: List[Dict[str, Any]]) -> List[Dict[str, Any
     return results
 
 
-def execute_risk_followups(risks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def execute_risk_followups(risks: List[Dict[str, Any]], user_id: str) -> List[Dict[str, Any]]:
     email_client = get_email_client()
     results: List[Dict[str, Any]] = []
     for risk in risks:
@@ -70,16 +71,19 @@ def execute_risk_followups(risks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             subject=f"Quick check-in - {company}",
             body_text=body,
             sequence_id=generate_id("recovery"),
+            user_id=user_id,
         )
         crm_update = update_deal_stage(
             account_id=account_id,
             new_stage="Re-engagement",
             notes=f"Recovery outreach sent. Risk level: {risk.get('risk_level', 'medium')}",
+            user_id=user_id,
         )
         log_activity(
             account_id=account_id,
             activity_type="risk_followup",
             description=f"Automated risk recovery email sent. Risk: {risk.get('risk_level', 'medium')}",
+            user_id=user_id,
         )
         results.append(
             {
@@ -94,7 +98,7 @@ def execute_risk_followups(risks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return results
 
 
-def execute_retention_outreach(churn_risks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def execute_retention_outreach(churn_risks: List[Dict[str, Any]], user_id: str) -> List[Dict[str, Any]]:
     email_client = get_email_client()
     results: List[Dict[str, Any]] = []
     for risk in churn_risks:
@@ -113,11 +117,13 @@ def execute_retention_outreach(churn_risks: List[Dict[str, Any]]) -> List[Dict[s
             subject=f"Your {company} success plan - let's reconnect",
             body_text=body,
             sequence_id=generate_id("retention"),
+            user_id=user_id,
         )
         log_activity(
             account_id=risk.get("account_id", ""),
             activity_type="retention_outreach",
             description=f"Retention email sent. Churn probability: {risk.get('churn_probability', 0):.1%}",
+            user_id=user_id,
         )
         results.append(
             {
@@ -133,25 +139,25 @@ def execute_retention_outreach(churn_risks: List[Dict[str, Any]]) -> List[Dict[s
 
 
 @retry(stop=stop_after_attempt(settings.max_retries + 1), wait=wait_exponential(min=1, max=4))
-def run_action_agent(action_type: str, payload: Dict[str, Any], session_id: str) -> Dict[str, Any]:
+def run_action_agent(action_type: str, payload: Dict[str, Any], session_id: str, user_id: str) -> Dict[str, Any]:
     logger.info("action_agent_start", action_type=action_type, session_id=session_id)
     executed_actions: List[Dict[str, Any]] = []
     total_emails_sent = 0
     total_crm_updates = 0
 
     if action_type == "send_sequences":
-        executed_actions = execute_send_sequence(payload.get("sequences", []))
+        executed_actions = execute_send_sequence(payload.get("sequences", []), user_id=user_id)
         total_emails_sent = sum(item.get("sent_count", 0) for item in executed_actions)
     elif action_type == "risk_followup":
-        executed_actions = execute_risk_followups(payload.get("risks", []))
+        executed_actions = execute_risk_followups(payload.get("risks", []), user_id=user_id)
         total_emails_sent = len([item for item in executed_actions if item.get("email_sent")])
         total_crm_updates = len([item for item in executed_actions if item.get("crm_updated")])
     elif action_type == "retention_outreach":
-        executed_actions = execute_retention_outreach(payload.get("churn_risks", []))
+        executed_actions = execute_retention_outreach(payload.get("churn_risks", []), user_id=user_id)
         total_emails_sent = len([item for item in executed_actions if item.get("email_sent")])
     elif action_type == "add_leads":
         for lead in payload.get("leads", []):
-            crm_record = add_new_lead(lead)
+            crm_record = add_new_lead(lead, user_id=user_id)
             executed_actions.append(
                 {
                     "action": "add_lead",

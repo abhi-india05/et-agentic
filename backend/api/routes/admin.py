@@ -120,10 +120,10 @@ async def get_sessions(
 
 
 @router.get("/pipeline")
-async def get_pipeline(_user: AuthUser = Depends(get_current_user)) -> Dict[str, Any]:
+async def get_pipeline(user: AuthUser = Depends(get_current_user)) -> Dict[str, Any]:
     return {
-        "stats": get_pipeline_stats(),
-        "accounts": get_all_accounts()[:20],
+        "stats": get_pipeline_stats(user_id=user.user_id),
+        "accounts": get_all_accounts(user_id=user.user_id)[:20],
         "timestamp": now_iso(),
     }
 
@@ -133,11 +133,11 @@ async def get_emails(
     limit: int = 50,
     to_email: Optional[str] = None,
     sequence_id: Optional[str] = None,
-    _user: AuthUser = Depends(get_current_user),
+    user: AuthUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
     return {
-        "emails": get_sent_emails(to_email=to_email, sequence_id=sequence_id)[: max(1, limit)],
-        "stats": get_email_stats(),
+        "emails": get_sent_emails(user_id=user.user_id, to_email=to_email, sequence_id=sequence_id)[: max(1, limit)],
+        "stats": get_email_stats(user_id=user.user_id),
         "timestamp": now_iso(),
     }
 
@@ -145,7 +145,7 @@ async def get_emails(
 @router.post("/send-email")
 async def send_email(
     req: SendEmailRequest,
-    _user: AuthUser = Depends(get_current_user),
+    user: AuthUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
     client = get_email_client()
     result = await asyncio.to_thread(
@@ -155,6 +155,7 @@ async def send_email(
         subject=req.subject,
         body_text=req.body_text,
         body_html=req.body_html,
+        user_id=user.user_id,
     )
     if not result.get("success"):
         raise APIError(
@@ -168,7 +169,7 @@ async def send_email(
 @router.post("/send-sequences")
 async def send_sequences(
     req: SendSequencesRequest,
-    _user: AuthUser = Depends(get_current_user),
+    user: AuthUser = Depends(get_current_user),
     entry_repo: OutreachEntryRepository = Depends(get_outreach_entry_repo),
 ) -> Dict[str, Any]:
     client = get_email_client()
@@ -192,6 +193,7 @@ async def send_sequences(
             to_name=sequence.lead_name or "",
             emails=payload,
             sequence_id=seq_id,
+            user_id=user.user_id,
         )
         results.append(result)
         sent_in_seq = int(result.get("sent", 0))

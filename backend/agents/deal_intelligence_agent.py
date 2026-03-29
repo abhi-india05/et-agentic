@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from typing import Any, Dict, List, Optional
@@ -9,7 +9,7 @@ from backend.agents.guardrails import parse_llm_json
 from backend.config.settings import settings
 from backend.llm.client import get_llm_client
 from backend.memory.vector_store import get_vector_store
-from backend.models.schemas import DealRisk, ProductContext
+from backend.models.schemas import DealRisk
 from backend.tools.crm_tool import get_at_risk_deals
 from backend.tools.scraping_tool import detect_intent_signals
 from backend.utils.helpers import build_agent_response, generate_id
@@ -19,7 +19,7 @@ logger = get_logger("deal_intelligence_agent")
 
 
 @retry(stop=stop_after_attempt(settings.max_retries + 1), wait=wait_exponential(min=1, max=4))
-def analyze_deal_risk(account: Dict[str, Any], product_context: ProductContext) -> DealRisk:
+def analyze_deal_risk(account: Dict[str, Any]) -> DealRisk:
     signals = detect_intent_signals(account.get("company", ""), account)
     prompt = f"""You are an expert deal intelligence analyst.
 
@@ -29,8 +29,6 @@ Account Data:
 External Signals:
 {json.dumps(signals, indent=2)}
 
-Use this product context when framing the recovery strategy:
-{product_context.prompt_block()}
 
 Return ONLY valid JSON:
 {{
@@ -58,7 +56,7 @@ Return ONLY valid JSON:
     return parse_llm_json(response.choices[0].message.content or "", DealRisk)
 
 
-def _fallback_risk(account: Dict[str, Any], product_context: ProductContext) -> DealRisk:
+def _fallback_risk(account: Dict[str, Any]) -> DealRisk:
     days_inactive = int(account.get("days_inactive", 0))
     return DealRisk(
         deal_id=account.get("account_id", ""),
@@ -71,7 +69,7 @@ def _fallback_risk(account: Dict[str, Any], product_context: ProductContext) -> 
         deal_velocity="stalled",
         days_inactive=days_inactive,
         recovery_strategy=(
-            f"Use {product_context.name or 'the product'} to demonstrate how the team can surface deal risk earlier and recover pipeline visibility. "
+            "Demonstrate how the team can surface deal risk earlier. "
             "Re-engage with a focused executive summary and a short working session."
         ),
         recommended_actions=["Send executive follow-up", "Book a recovery workshop", "Share tailored ROI snapshot"],
@@ -84,14 +82,16 @@ def _fallback_risk(account: Dict[str, Any], product_context: ProductContext) -> 
 def run_deal_intelligence_agent(
     deal_ids: Optional[List[str]],
     inactivity_threshold: int,
-    product_context: ProductContext,
     session_id: str,
-    user_id: Optional[str] = None,
+    user_id: str,
 ) -> Dict[str, Any]:
+    if not user_id:
+        raise ValueError("user_id is required")
+        
     logger.info("deal_intelligence_agent_start", session_id=session_id)
     memory = get_vector_store()
-    namespace = user_id or "global"
-    at_risk = get_at_risk_deals(inactivity_days=inactivity_threshold)
+    namespace = user_id
+    at_risk = get_at_risk_deals(inactivity_days=inactivity_threshold, user_id=user_id)
     if deal_ids:
         at_risk = [account for account in at_risk if account.get("account_id") in deal_ids]
 
@@ -118,16 +118,16 @@ def run_deal_intelligence_agent(
     analyzed: List[Dict[str, Any]] = []
     for account in at_risk[:10]:
         try:
-            analyzed.append(analyze_deal_risk(account, product_context).model_dump())
+            analyzed.append(analyze_deal_risk(account).model_dump())
         except Exception as exc:
             logger.warning("deal_risk_llm_failed", account_id=account.get("account_id"), error=str(exc))
-            analyzed.append(_fallback_risk(account, product_context).model_dump())
+            analyzed.append(_fallback_risk(account).model_dump())
 
     analyzed.sort(key=lambda item: item.get("risk_score", 0.0), reverse=True)
     critical_count = len([item for item in analyzed if item.get("risk_level") in {"critical", "high"}])
     memory.add_document(
         doc_id=generate_id("deal_intel"),
-        content=f"Deal risk analysis completed for {len(analyzed)} accounts. Product context: {product_context.name or 'none'}.",
+        content=f"Deal risk analysis completed for {len(analyzed)} accounts.",
         metadata={"agent": "deal_intelligence", "session_id": session_id, "user_id": user_id or ""},
         namespace=namespace,
     )
@@ -139,7 +139,6 @@ def run_deal_intelligence_agent(
             "total_at_risk": len(analyzed),
             "critical_count": critical_count,
             "requires_escalation": any(item.get("escalate_to_manager") for item in analyzed),
-            "product_context": product_context.model_dump(),
         },
         reasoning=f"Analyzed {len(analyzed)} at-risk deals. {critical_count} classified as critical/high risk.",
         confidence=0.84,

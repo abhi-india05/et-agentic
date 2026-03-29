@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 from typing import Any, Dict, List, Optional
@@ -19,7 +19,6 @@ from backend.models.schemas import (
     EmailSequenceResult,
     ExecutionPlan,
     ExplainabilityOutput,
-    ProductContext,
     ProspectingOutput,
     WorkflowValidation,
 )
@@ -36,7 +35,7 @@ ALLOWED_TOOLS_BY_TASK: Dict[str, List[str]] = {
 
 
 def _build_plan(task_type: str, input_data: Dict[str, Any]) -> ExecutionPlan:
-    product_context = ProductContext.model_validate(input_data.get("product_context") or {})
+    product_context = input_data.get("product_context") or {}
     if task_type == "cold_outreach":
         steps = ["prospecting_agent", "digital_twin_agent", "outreach_agent", "action_agent", "crm_auditor_agent", "validator"]
     elif task_type == "risk_detection":
@@ -148,6 +147,7 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
             run_prospecting_agent,
             {
                 "company": input_data.get("company", ""),
+                "product_context": plan.product_context,
                 "industry": input_data.get("industry", ""),
                 "company_size": input_data.get("size", ""),
                 "session_id": session_id,
@@ -165,6 +165,7 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
             {
                 "leads": prospecting.get("data", {}).get("leads", []),
                 "company": input_data.get("company", ""),
+                "product_context": plan.product_context,
                 "industry": input_data.get("industry", ""),
                 "session_id": session_id,
                 "user_id": user_id,
@@ -216,6 +217,7 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
                     "action_type": "send_sequences",
                     "payload": {"sequences": outreach.get("data", {}).get("sequences", [])},
                     "session_id": session_id,
+                    "user_id": user_id,
                 },
                 "Action execution failed.",
             )
@@ -225,7 +227,7 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
         crm_audit = _execute_agent(
             "crm_auditor_agent",
             run_crm_auditor_agent,
-            {"session_id": session_id},
+            {"session_id": session_id, "user_id": user_id},
             "CRM auditor failed.",
         )
         agent_outputs["crm_auditor_agent"] = crm_audit
@@ -238,7 +240,6 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
             {
                 "deal_ids": input_data.get("deal_ids"),
                 "inactivity_threshold": input_data.get("inactivity_threshold_days", 10),
-                "product_context": plan.product_context,
                 "session_id": session_id,
                 "user_id": user_id,
             },
@@ -250,7 +251,7 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
         crm_audit = _execute_agent(
             "crm_auditor_agent",
             run_crm_auditor_agent,
-            {"session_id": session_id},
+            {"session_id": session_id, "user_id": user_id},
             "CRM auditor failed.",
         )
         agent_outputs["crm_auditor_agent"] = crm_audit
@@ -264,7 +265,7 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
         action = _execute_agent(
             "action_agent",
             run_action_agent,
-            {"action_type": "risk_followup", "payload": {"risks": high_risks}, "session_id": session_id},
+            {"action_type": "risk_followup", "payload": {"risks": high_risks}, "session_id": session_id, "user_id": user_id},
             "Risk follow-up actions failed.",
         )
         agent_outputs["action_agent"] = action
@@ -277,7 +278,6 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
             {
                 "account_ids": input_data.get("account_ids"),
                 "top_n": input_data.get("top_n", 3),
-                "product_context": plan.product_context,
                 "session_id": session_id,
                 "user_id": user_id,
             },
@@ -293,6 +293,7 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
                 "action_type": "retention_outreach",
                 "payload": {"churn_risks": churn.get("data", {}).get("top_churn_risks", [])},
                 "session_id": session_id,
+                "user_id": user_id,
             },
             "Retention outreach actions failed.",
         )

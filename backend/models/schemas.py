@@ -38,24 +38,12 @@ class AgentResponse(StrictBaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
-class ProductContext(StrictBaseModel):
-    product_id: Optional[str] = None
-    name: str = ""
-    description: str = ""
-    source: str = "none"
-
-    def prompt_block(self) -> str:
-        if not (self.name or self.description):
-            return "No product context available."
-        return f"Product: {self.name or 'Unnamed Product'}\nDescription: {self.description or 'No product description provided.'}"
-
-
 class ExecutionPlan(StrictBaseModel):
     task_type: str
     allowed_tools: List[str]
     steps: List[str]
     fallback_strategy: str
-    product_context: ProductContext = Field(default_factory=ProductContext)
+    product_context: Dict[str, str] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -127,7 +115,6 @@ class OutreachRequest(StrictBaseModel):
     size: str
     website: Optional[str] = None
     notes: Optional[str] = None
-    product_id: Optional[str] = None
     product_name: Optional[str] = None
     product_description: Optional[str] = None
     auto_send: bool = False
@@ -223,13 +210,11 @@ class RiskDetectionRequest(StrictBaseModel):
     deal_ids: Optional[List[str]] = None
     check_all: bool = True
     inactivity_threshold_days: int = Field(default=10, ge=1, le=180)
-    product_id: Optional[str] = None
 
 
 class ChurnPredictionRequest(StrictBaseModel):
     account_ids: Optional[List[str]] = None
     top_n: int = Field(default=3, ge=1, le=20)
-    product_id: Optional[str] = None
 
 
 class SendEmailRequest(StrictBaseModel):
@@ -276,50 +261,6 @@ class ReviewedSequence(StrictBaseModel):
 
 class SendSequencesRequest(StrictBaseModel):
     sequences: List[ReviewedSequence] = Field(default_factory=list)
-
-
-class ProductCreateRequest(StrictBaseModel):
-    name: str = Field(..., min_length=1, max_length=200)
-    description: Optional[str] = Field(default=None, max_length=5000)
-
-    @field_validator("name")
-    @classmethod
-    def _name(cls, value: str) -> str:
-        cleaned = sanitize_text(value, max_len=200)
-        if not cleaned:
-            raise ValueError("Name is required")
-        return cleaned
-
-    @field_validator("description")
-    @classmethod
-    def _description(cls, value: Optional[str]) -> Optional[str]:
-        return sanitize_text(value, max_len=5000)
-
-
-class ProductUpdateRequest(StrictBaseModel):
-    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
-    description: Optional[str] = Field(default=None, max_length=5000)
-
-    @field_validator("name")
-    @classmethod
-    def _name(cls, value: Optional[str]) -> Optional[str]:
-        return sanitize_text(value, max_len=200)
-
-    @field_validator("description")
-    @classmethod
-    def _description(cls, value: Optional[str]) -> Optional[str]:
-        return sanitize_text(value, max_len=5000)
-
-
-class ProductResponse(StrictBaseModel):
-    product_id: str
-    owner_user_id: str
-    name: str
-    description: Optional[str] = None
-    created_at: datetime
-    updated_at: datetime
-    is_deleted: bool = False
-    deleted_at: Optional[datetime] = None
 
 
 class SessionResponse(StrictBaseModel):
@@ -401,7 +342,6 @@ class OutreachEntryStatus(str, Enum):
 class OutreachEntry(StrictBaseModel):
     id: str
     user_id: str
-    product_id: Optional[str] = None
     company_name: str
     company_domain: Optional[str] = None
     outreach_type: str = "email"

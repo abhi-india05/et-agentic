@@ -21,7 +21,6 @@ class OutreachEntryRepository(Protocol):
         page_size: int,
         status: Optional[str] = None,
         company: Optional[str] = None,
-        product_id: Optional[str] = None,
     ) -> Tuple[List[OutreachEntry], int]: ...
     async def update_status(self, entry_id: str, status: OutreachEntryStatus) -> Optional[OutreachEntry]: ...
 
@@ -31,7 +30,6 @@ def _doc_to_entry(doc: Dict[str, Any]) -> OutreachEntry:
     return OutreachEntry(
         id=str(doc.get("id", "")),
         user_id=str(doc.get("user_id", "")),
-        product_id=doc.get("product_id"),
         company_name=str(doc.get("company_name", "")),
         company_domain=doc.get("company_domain"),
         outreach_type=str(doc.get("outreach_type", "email")),
@@ -73,7 +71,6 @@ class MongoOutreachEntryRepository:
         page_size: int,
         status: Optional[str] = None,
         company: Optional[str] = None,
-        product_id: Optional[str] = None,
     ) -> Tuple[List[OutreachEntry], int]:
         await self.ensure_indexes()
         filters: Dict[str, Any] = {"user_id": user_id}
@@ -81,8 +78,6 @@ class MongoOutreachEntryRepository:
             filters["status"] = status
         if company:
             filters["company_name"] = company
-        if product_id:
-            filters["product_id"] = product_id
             
         total = await self._col.count_documents(filters)
         cursor = (

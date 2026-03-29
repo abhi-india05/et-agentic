@@ -77,17 +77,19 @@ class VectorMemoryStore:
         self,
         doc_id: str,
         content: str,
+        namespace: str,
         metadata: Optional[Dict[str, Any]] = None,
-        namespace: Optional[str] = None,
     ) -> bool:
-        """Add a document with optional namespace isolation.
+        """Add a document with required namespace isolation.
 
         Args:
             doc_id: Unique identifier for the document.
             content: Text content to embed and store.
+            namespace: User-level namespace for isolation (mandatory user_id).
             metadata: Arbitrary metadata dict (company, agent, session, etc.).
-            namespace: User-level namespace for isolation (typically user_id).
         """
+        if not namespace or namespace == "global":
+            raise ValueError("namespace (user_id) is strictly required for vector store operations.")
         try:
             # Enforce global document limit
             if len(self.documents) >= settings.memory_max_total_documents:
@@ -108,7 +110,7 @@ class VectorMemoryStore:
                 "doc_id": doc_id,
                 "content": content,
                 "metadata": metadata or {},
-                "namespace": namespace or "global",
+                "namespace": namespace,
                 "timestamp": now.isoformat(),
                 "created_at_epoch": now.timestamp(),
                 "embedding_index": len(self.documents),
@@ -126,11 +128,14 @@ class VectorMemoryStore:
     def search(
         self,
         query: str,
+        namespace: str,
         top_k: int = 5,
         filter_metadata: Optional[Dict[str, Any]] = None,
-        namespace: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Search documents, optionally scoped to a namespace."""
+        """Search documents, scoped to a namespace."""
+        if not namespace or namespace == "global":
+            raise ValueError("namespace (user_id) is strictly required for search.")
+            
         if not self.documents:
             return []
 
@@ -153,8 +158,7 @@ class VectorMemoryStore:
                     r["similarity_score"] = 0.5
 
             # Filter by namespace
-            if namespace:
-                candidates = [r for r in candidates if r.get("namespace") in (namespace, "global")]
+            candidates = [r for r in candidates if r.get("namespace") == namespace]
 
             # Filter by metadata
             if filter_metadata:
@@ -173,11 +177,14 @@ class VectorMemoryStore:
     def get_context_for_company(
         self,
         company: str,
-        namespace: Optional[str] = None,
+        namespace: str,
     ) -> str:
-        results = self.search(company, top_k=3, filter_metadata={"company": company}, namespace=namespace)
+        if not namespace or namespace == "global":
+            raise ValueError("namespace (user_id) is required.")
+            
+        results = self.search(company, namespace=namespace, top_k=3, filter_metadata={"company": company})
         if not results:
-            results = self.search(company, top_k=3, namespace=namespace)
+            results = self.search(company, namespace=namespace, top_k=3)
 
         if not results:
             return "No prior context available."

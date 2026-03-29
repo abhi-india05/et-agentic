@@ -7,7 +7,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 from backend.config.settings import settings
 from backend.llm.client import get_llm_client
 from backend.memory.vector_store import get_vector_store
-from backend.models.schemas import ProductContext
+
 from backend.tools.crm_tool import get_all_accounts, get_all_usage_data
 from backend.utils.helpers import build_agent_response, generate_id
 from backend.utils.logger import get_logger, record_audit
@@ -65,7 +65,7 @@ def _call_llm_for_retention(prompt: str) -> str:
     return text
 
 
-def _generate_retention_strategy(account: Dict, usage: Dict, churn_score: float, product_context: ProductContext) -> str:
+def _generate_retention_strategy(account: Dict, usage: Dict, churn_score: float) -> str:
     feature_adoption_str = f"{usage.get('feature_adoption', 0):.1%}" if usage else "N/A"
     api_trend_str = f"{usage.get('api_calls_trend', 0):+.0%}" if usage else "N/A"
     renewal_str = str(usage.get("contract_renewal_days", "unknown")) if usage else "N/A"
@@ -82,8 +82,6 @@ Feature Adoption: {feature_adoption_str}
 API Usage Trend: {api_trend_str}
 Contract Renewal In: {renewal_str} days
 
-Use this product context in the intervention plan:
-{product_context.prompt_block()}
 
 Write a specific, actionable 2-3 sentence retention strategy. Return ONLY the strategy text."""
     try:
@@ -91,7 +89,7 @@ Write a specific, actionable 2-3 sentence retention strategy. Return ONLY the st
     except Exception as exc:
         logger.warning("retention_llm_failed", company=account.get("company"), error=str(exc))
         return (
-            f"Use {product_context.name or 'the product'} to surface adoption gaps and deal-risk signals in the next executive review. "
+            "Deploy immediate adoption workshops to reverse churn risk. "
             f"Focus on lifting feature adoption from {feature_adoption_str}, resolving active support pain, and attaching a measurable 30-day success plan."
         )
 
@@ -99,7 +97,6 @@ Write a specific, actionable 2-3 sentence retention strategy. Return ONLY the st
 def run_churn_agent(
     account_ids: Optional[List[str]],
     top_n: int,
-    product_context: ProductContext,
     session_id: str,
     user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -163,7 +160,7 @@ def run_churn_agent(
                 "contact_email": account.get("email"),
                 "industry": account.get("industry"),
                 "stage": account.get("stage"),
-                "retention_strategy": _generate_retention_strategy(account, usage, churn_score, product_context),
+                "retention_strategy": _generate_retention_strategy(account, usage, churn_score),
             }
         )
 
@@ -181,7 +178,6 @@ def run_churn_agent(
             "total_arr_at_risk": total_arr_at_risk,
             "avg_churn_probability": round(average_probability, 4),
             "critical_count": len([risk for risk in top_risks if risk["urgency"] == "critical"]),
-            "product_context": product_context.model_dump(),
         },
         reasoning=f"Analyzed {len(active_accounts)} active accounts. Top {top_n} churn risks identified.",
         confidence=0.87,
@@ -190,7 +186,7 @@ def run_churn_agent(
     )
     memory.add_document(
         doc_id=generate_id("churn"),
-        content=f"Churn analysis completed for {len(active_accounts)} accounts with product context '{product_context.name or 'none'}'.",
+        content=f"Churn analysis completed for {len(active_accounts)} accounts.",
         metadata={"agent": "churn", "session_id": session_id, "user_id": user_id or ""},
         namespace=namespace,
     )

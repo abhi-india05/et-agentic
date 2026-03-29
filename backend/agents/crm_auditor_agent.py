@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from typing import Any, Dict, List
@@ -103,11 +103,14 @@ def _call_llm(prompt: str) -> CRMAuditRecommendation:
     return parse_llm_json(response.choices[0].message.content or "", CRMAuditRecommendation)
 
 
-def run_crm_auditor_agent(session_id: str) -> Dict[str, Any]:
-    logger.info("crm_auditor_agent_start", session_id=session_id)
-    accounts = get_all_accounts()
+def run_crm_auditor_agent(session_id: str, user_id: str) -> Dict[str, Any]:
+    if not user_id:
+        raise ValueError("user_id is required")
+        
+    logger.info("crm_auditor_agent_start", session_id=session_id, user_id=user_id)
+    accounts = get_all_accounts(user_id=user_id)
     anomalies = detect_crm_anomalies(accounts)
-    pipeline_stats = get_pipeline_stats()
+    pipeline_stats = get_pipeline_stats(user_id=user_id)
     try:
         recommendations = _call_llm(
             f"""You are a CRM audit specialist. Analyze this CRM audit data and provide strategic recommendations.

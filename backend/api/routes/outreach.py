@@ -21,7 +21,6 @@ async def get_outreach_entries(
     page_size: Optional[int] = None,
     status: Optional[str] = None,
     company: Optional[str] = None,
-    product_id: Optional[str] = None,
     user: AuthUser = Depends(get_current_user),
     repo: OutreachEntryRepository = Depends(get_outreach_entry_repo),
 ) -> Dict[str, Any]:
@@ -32,7 +31,6 @@ async def get_outreach_entries(
         page_size=normalized_size,
         status=status,
         company=company,
-        product_id=product_id,
     )
     return {
         "entries": [entry.model_dump() for entry in entries],

@@ -135,30 +135,6 @@ export const api = {
   sessions: () => request('/sessions'),
   memoryStats: () => request('/memory/stats'),
 
-  // --- Products (full CRUD + pagination + filters) ---
-  products: ({ page = 1, pageSize = 20, name, createdFrom, createdTo, includeDeleted = false } = {}) => {
-    const params = new URLSearchParams()
-    params.set('page', String(page))
-    params.set('page_size', String(pageSize))
-    if (name) params.set('name', name)
-    if (createdFrom) params.set('created_from', createdFrom)
-    if (createdTo) params.set('created_to', createdTo)
-    if (includeDeleted) params.set('include_deleted', 'true')
-    return requestWithPagination(`/products?${params.toString()}`)
-  },
-
-  createProduct: (body) =>
-    request('/products', { method: 'POST', body: JSON.stringify(body) }),
-
-  product: (id) =>
-    request(`/products/${id}`),
-
-  updateProduct: (id, body) =>
-    request(`/products/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
-
-  deleteProduct: (id) =>
-    request(`/products/${id}`, { method: 'DELETE' }),
-
   // --- Agent Workflows ---
   runOutreach: (body) =>
     request('/run-outreach', { method: 'POST', body: JSON.stringify(body) }),
@@ -173,13 +149,12 @@ export const api = {
     request('/send-sequences', { method: 'POST', body: JSON.stringify(body) }),
 
   // --- Outreach Entries ---
-  outreachEntries: ({ page = 1, pageSize = 50, status, company, productId } = {}) => {
+  outreachEntries: ({ page = 1, pageSize = 50, status, company, } = {}) => {
     const params = new URLSearchParams()
     params.set('page', String(page))
     params.set('page_size', String(pageSize))
     if (status) params.set('status', status)
     if (company) params.set('company', company)
-    if (productId) params.set('product_id', productId)
     // Note: outreach endpoints are mapped under /outreach
     return requestWithPagination(`/outreach/entries?${params.toString()}`)
   },

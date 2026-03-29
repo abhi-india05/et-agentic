@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
@@ -8,7 +8,7 @@ from backend.agents.guardrails import parse_llm_json
 from backend.config.settings import settings
 from backend.llm.client import get_llm_client
 from backend.memory.vector_store import get_vector_store
-from backend.models.schemas import EmailSequenceResult, ProductContext
+from backend.models.schemas import EmailSequenceResult
 from backend.utils.helpers import build_agent_response, generate_id
 from backend.utils.logger import get_logger, record_audit
 
@@ -36,9 +36,9 @@ def _call_llm_for_sequence(prompt: str) -> EmailSequenceResult:
     return parse_llm_json(response.choices[0].message.content or "", EmailSequenceResult)
 
 
-def _fallback_sequence(lead: Dict[str, Any], company: str, product_context: ProductContext, sequence_id: str) -> EmailSequenceResult:
-    product_line = product_context.name or "RevOps AI"
-    value_line = product_context.description or "AI-powered deal risk detection, churn prediction, and revenue workflow automation."
+def _fallback_sequence(lead: Dict[str, Any], company: str, product_context: Dict[str, str], sequence_id: str) -> EmailSequenceResult:
+    product_line = product_context.get("name") or "RevOps AI"
+    value_line = product_context.get("description") or "AI-powered deal risk detection, churn prediction, and revenue workflow automation."
     return EmailSequenceResult(
         lead_name=lead.get("name", "there"),
         lead_email=lead.get("email", ""),
@@ -92,13 +92,16 @@ def run_outreach_agent(
     leads: List[Dict[str, Any]],
     twin_profiles: List[Dict[str, Any]],
     company: str,
-    product_context: ProductContext,
+    product_context: Dict[str, str],
     session_id: str,
-    user_id: Optional[str] = None,
+    user_id: str,
 ) -> Dict[str, Any]:
-    logger.info("outreach_agent_start", company=company, leads=len(leads), session_id=session_id)
+    if not user_id:
+        raise ValueError("user_id is required")
+        
+    logger.info("outreach_agent_start", company=company, session_id=session_id)
     memory = get_vector_store()
-    namespace = user_id or "global"
+    namespace = user_id
     sequences: List[Dict[str, Any]] = []
 
     for index, lead in enumerate(leads[:2]):
@@ -116,7 +119,8 @@ Recommended Tone: {twin.get('recommended_tone', 'consultative')}
 Opening Hook: {twin.get('opening_hook', 'How are you improving forecast confidence this quarter?')}
 
 Use this product context heavily in the messaging:
-{product_context.prompt_block()}
+Product: {product_context.get("name", "Unnamed Product")}
+Description: {product_context.get("description", "No product description provided")}
 
 Return ONLY JSON with:
 {{
@@ -143,7 +147,7 @@ Return ONLY JSON with:
     average_reply = sum(item.get("predicted_reply_rate", 0.0) for item in sequences) / max(len(sequences), 1)
     memory.add_document(
         doc_id=generate_id("outreach"),
-        content=f"Outreach generated for {company} using product context '{product_context.name or 'none'}'.",
+        content=f"Outreach generated for {company} using product context '{product_context.get("name") or 'none'}'.",
         metadata={"company": company, "agent": "outreach", "session_id": session_id, "user_id": user_id or ""},
         namespace=namespace,
     )
@@ -156,7 +160,7 @@ Return ONLY JSON with:
             "avg_predicted_open_rate": round(average_open, 4),
             "avg_predicted_reply_rate": round(average_reply, 4),
             "company": company,
-            "product_context": product_context.model_dump(),
+            "product_context": product_context,
         },
         reasoning=f"Generated {len(sequences)} personalized 3-email sequences for {company}.",
         confidence=0.79,

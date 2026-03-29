@@ -20,7 +20,7 @@ from backend.agents.failure_recovery import get_recovery_engine
 from backend.auth.passwords import PasswordValidationError, hash_password
 from backend.config.settings import settings
 from backend.db.mongo import close_clients, get_database
-from backend.deps import get_product_repo, get_refresh_token_repo, get_session_repo, get_user_repo
+from backend.deps import get_refresh_token_repo, get_session_repo, get_user_repo
 from backend.memory.vector_store import get_vector_store
 from backend.repositories.users import UserRepository
 from backend.services.auth_service import AuthServiceError, InvalidRefreshTokenError, RefreshTokenReuseError
@@ -73,11 +73,9 @@ async def _initialize_runtime() -> None:
     try:
         await get_database().command("ping")
         user_repo = get_user_repo()
-        product_repo = get_product_repo()
         session_repo = get_session_repo()
         refresh_repo = get_refresh_token_repo()
         await user_repo.ensure_indexes()
-        await product_repo.ensure_indexes()
         await session_repo.ensure_indexes()
         await refresh_repo.ensure_indexes()
         await _seed_admin_user(user_repo)
@@ -331,12 +329,10 @@ app.include_router(api_router)
 # Backward-compatible non-prefixed mounts so existing tests and frontends
 # continue working while migrations happen.
 from backend.api.routes.auth import router as _auth_compat  # noqa: E402
-from backend.api.routes.products import router as _products_compat  # noqa: E402
 from backend.api.routes.workflows import router as _workflows_compat  # noqa: E402
 from backend.api.routes.admin import router as _admin_compat  # noqa: E402
 
 app.include_router(_auth_compat)
-app.include_router(_products_compat)
 app.include_router(_workflows_compat)
 app.include_router(_admin_compat)
 
