@@ -32,8 +32,9 @@ async def _run_workflow(
     user: AuthUser,
     response: Response,
     session_repo: SessionRepository,
+    session_id_override: Optional[str] = None,
 ) -> Dict[str, Any]:
-    session_id = generate_session_id()
+    session_id = session_id_override or generate_session_id()
     bind_context(session_id=session_id, user_id=user.user_id, username=user.username, role=user.role)
     await session_repo.create_session(
         session_id=session_id,
@@ -103,6 +104,7 @@ async def run_outreach(
         user=user,
         response=response,
         session_repo=session_repo,
+        session_id_override=payload.session_id,
     )
 
     if result.get("status") in ("completed", "completed_with_errors") and "outreach_agent" in result.get("data", {}).get("agent_outputs", {}):

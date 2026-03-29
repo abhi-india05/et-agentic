@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
+import os
 from typing import Any, Dict, List
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from backend.config.settings import settings
+from backend.llm.gemini_client import call_gemini
 from backend.tools.crm_tool import add_new_lead, log_activity, update_deal_stage
 from backend.tools.email_tool import get_email_client
 from backend.utils.helpers import build_agent_response, generate_id, now_iso
@@ -12,6 +15,28 @@ from backend.utils.logger import get_logger, record_audit
 
 logger = get_logger("action_agent")
 
+def _load_prompt() -> str:
+    path = os.path.join(os.path.dirname(__file__), "..", "prompts", "action_prompt.txt")
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+def _generate_action_email(action_type: str, company: str, context: str) -> Dict[str, str]:
+    prompt_template = _load_prompt()
+    prompt = prompt_template.replace("{action_type}", action_type)\
+                            .replace("{company}", company)\
+                            .replace("{context}", context)
+    try:
+        response = call_gemini(prompt, structured=True, temperature=0.7)
+        return {
+            "subject": response.get("subject", f"Following up with {company}"),
+            "body": response.get("body", f"Hi there,\n\n{context}\n\nLet's connect soon.")
+        }
+    except Exception as e:
+        logger.error("action_agent_llm_failed", error=str(e))
+        return {
+            "subject": f"Connecting regarding {company}",
+            "body": f"Hi there,\n\n{context}\n\nCould we find a time to discuss next steps?"
+        }
 
 def execute_send_sequence(sequences: List[Dict[str, Any]], user_id: str) -> List[Dict[str, Any]]:
     email_client = get_email_client()
@@ -59,17 +84,15 @@ def execute_risk_followups(risks: List[Dict[str, Any]], user_id: str) -> List[Di
     for risk in risks:
         company = risk.get("company", "Unknown")
         account_id = risk.get("deal_id", "")
-        body = (
-            "Hi there,\n\n"
-            "I noticed a few risk signals on your account and wanted to proactively reconnect.\n\n"
-            f"{risk.get('recovery_strategy', '')}\n\n"
-            "Would 15 minutes this week help us align on next steps?"
-        )
+        
+        context = f"We identified risk signals on the account. Please review this strategy: {risk.get('recovery_strategy', '')}"
+        generated = _generate_action_email("risk_recovery", company, context)
+        
         send_result = email_client.send_email(
             to_email=f"contact@{company.lower().replace(' ', '')}.com",
             to_name=f"{company} Team",
-            subject=f"Quick check-in - {company}",
-            body_text=body,
+            subject=generated["subject"],
+            body_text=generated["body"],
             sequence_id=generate_id("recovery"),
             user_id=user_id,
         )
@@ -105,17 +128,15 @@ def execute_retention_outreach(churn_risks: List[Dict[str, Any]], user_id: str) 
         company = risk.get("company", "Unknown")
         contact_name = risk.get("contact_name", "")
         contact_email = risk.get("contact_email") or f"account@{company.lower().replace(' ', '-')}.com"
-        body = (
-            f"Hi {contact_name or 'there'},\n\n"
-            "I wanted to reach out proactively because your success is important to us.\n\n"
-            f"{risk.get('retention_strategy', '')}\n\n"
-            "Would you be open to a short business review this week?"
-        )
+        
+        context = f"Customer has high churn probability. Propose this retention strategy: {risk.get('retention_strategy', '')}"
+        generated = _generate_action_email("retention", company, context)
+
         send_result = email_client.send_email(
             to_email=contact_email,
             to_name=contact_name or company,
-            subject=f"Your {company} success plan - let's reconnect",
-            body_text=body,
+            subject=generated["subject"],
+            body_text=generated["body"],
             sequence_id=generate_id("retention"),
             user_id=user_id,
         )

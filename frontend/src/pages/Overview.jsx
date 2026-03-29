@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react'
+import { Activity, AlertTriangle, CheckCircle, DollarSign, Mail, TrendingDown, Zap } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Activity, AlertTriangle, TrendingDown, Zap, DollarSign, Mail, CheckCircle, Clock } from 'lucide-react'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
-import { StatCard, LoadingState, ErrorState, SectionHeader } from '../components/UI.jsx'
+import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { ErrorState, LoadingState, SectionHeader, StatCard } from '../components/UI.jsx'
 import { api } from '../services/api.js'
 import { fmt } from '../utils/fmt.js'
 
@@ -32,11 +32,44 @@ export default function Overview() {
 
   async function loadData() {
     try {
-      const [p, h, l] = await Promise.all([api.pipeline(), api.health(), api.logs()])
-      setPipeline(p)
-      setHealth(h)
-      setLogs(l.logs?.slice(0, 6) || [])
-      setError(null)
+      const [pipelineRes, healthRes, logsRes] = await Promise.allSettled([
+        api.pipeline(),
+        api.health(),
+        api.logs(),
+      ])
+
+      const failures = []
+
+      if (pipelineRes.status === 'fulfilled') {
+        setPipeline(pipelineRes.value)
+      } else {
+        failures.push('pipeline')
+      }
+
+      if (healthRes.status === 'fulfilled') {
+        setHealth(healthRes.value)
+      } else {
+        failures.push('health')
+      }
+
+      if (logsRes.status === 'fulfilled') {
+        setLogs(logsRes.value.logs?.slice(0, 6) || [])
+      } else {
+        setLogs([])
+        failures.push('logs')
+      }
+
+      // Only show blocking error when all dashboard sources fail.
+      if (failures.length === 3) {
+        const reason =
+          (pipelineRes.status === 'rejected' && pipelineRes.reason?.message)
+          || (healthRes.status === 'rejected' && healthRes.reason?.message)
+          || (logsRes.status === 'rejected' && logsRes.reason?.message)
+          || 'Failed to load dashboard data'
+        setError(reason)
+      } else {
+        setError(null)
+      }
     } catch (e) {
       setError(e.message)
     } finally {

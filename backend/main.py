@@ -101,10 +101,7 @@ async def lifespan(_app: FastAPI):
     logger.info(
         "revops_ai_startup",
         environment=settings.environment,
-        llm_provider=settings.llm_provider,
-        model=settings.openai_model,
-        embedding_model=settings.openai_embedding_model,
-        has_openai_key=settings.has_openai_key,
+        has_gemini_key=settings.has_gemini_key,
         mock_email=settings.is_mock_email,
     )
     await _initialize_runtime()
@@ -305,17 +302,29 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 @app.get("/health")
 async def health_check() -> Dict[str, Any]:
     database = await _database_health()
+    email_stats: Dict[str, Any]
+    try:
+        # Health is unscoped; use a synthetic namespace so stats lookup never crashes the endpoint.
+        email_stats = get_email_stats(user_id="system_health")
+    except Exception as exc:
+        logger.warning("health_email_stats_failed", error=str(exc))
+        email_stats = {
+            "total": 0,
+            "sent": 0,
+            "failed": 0,
+            "success_rate": 0.0,
+            "error": str(exc),
+        }
+
     return {
         "status": "healthy" if database.get("ready") else "degraded",
         "version": app.version,
         "environment": settings.environment,
         "timestamp": now_iso(),
-        "llm_provider": settings.llm_provider,
-        "llm_model": settings.openai_model,
-        "openai_configured": settings.has_openai_key,
+        "gemini_configured": settings.has_gemini_key,
         "email_mode": "live" if not settings.is_mock_email else "mock",
         "vector_store": get_vector_store().stats(),
-        "email_stats": get_email_stats(),
+        "email_stats": email_stats,
         "database": database,
     }
 

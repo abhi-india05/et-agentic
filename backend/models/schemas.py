@@ -142,6 +142,7 @@ class ChurnRisk(StrictBaseModel):
 
 
 class OutreachRequest(StrictBaseModel):
+    session_id: Optional[str] = None
     company: str
     industry: str
     size: str
@@ -178,6 +179,12 @@ class OutreachRequest(StrictBaseModel):
     @classmethod
     def _long_text(cls, value: Optional[str]) -> Optional[str]:
         return sanitize_text(value, max_len=5000)
+
+    @field_validator("session_id")
+    @classmethod
+    def _session_id(cls, value: Optional[str]) -> Optional[str]:
+        cleaned = sanitize_text(value, max_len=120)
+        return cleaned or None
 
 
 class AuthLoginRequest(StrictBaseModel):
@@ -275,6 +282,87 @@ class SendEmailRequest(StrictBaseModel):
     @classmethod
     def _body(cls, value: Optional[str]) -> Optional[str]:
         return sanitize_text(value, max_len=10000, allow_empty=True)
+
+
+class SingleLeadSendRequest(StrictBaseModel):
+    lead_id: Optional[str] = None
+    lead_name: Optional[str] = ""
+    sequence_id: Optional[str] = None
+    email: str
+    content: str
+    subject: Optional[str] = None
+    from_email: Optional[str] = None
+    from_name: Optional[str] = None
+
+    @field_validator("email")
+    @classmethod
+    def _recipient_email(cls, value: str) -> str:
+        candidate = (value or "").strip().lower()
+        if not EMAIL_RE.match(candidate):
+            raise ValueError("Invalid email address")
+        return candidate
+
+    @field_validator("content")
+    @classmethod
+    def _content(cls, value: str) -> str:
+        cleaned = sanitize_text(value, max_len=20000)
+        if not cleaned:
+            raise ValueError("content is required")
+        return cleaned
+
+    @field_validator("subject")
+    @classmethod
+    def _subject(cls, value: Optional[str]) -> Optional[str]:
+        return sanitize_text(value, max_len=255)
+
+    @field_validator("from_name")
+    @classmethod
+    def _from_name(cls, value: Optional[str]) -> Optional[str]:
+        return sanitize_text(value, max_len=120)
+
+    @field_validator("from_email")
+    @classmethod
+    def _from_email(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip().lower()
+        if not cleaned:
+            return None
+        if not EMAIL_RE.match(cleaned):
+            raise ValueError("Invalid from_email address")
+        return cleaned
+
+
+class RefineEmailRequest(StrictBaseModel):
+    lead_id: str
+    original_email: str
+    prompt: str
+    lead_context: Dict[str, Any] = Field(default_factory=dict)
+    insights: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("lead_id")
+    @classmethod
+    def _lead_id(cls, value: str) -> str:
+        cleaned = sanitize_text(value, max_len=200)
+        if not cleaned:
+            raise ValueError("lead_id is required")
+        return cleaned
+
+    @field_validator("original_email")
+    @classmethod
+    def _original_email(cls, value: str) -> str:
+        cleaned = sanitize_text(value, max_len=20000)
+        if not cleaned:
+            raise ValueError("original_email is required")
+        return cleaned
+
+    @field_validator("prompt")
+    @classmethod
+    def _prompt(cls, value: str) -> str:
+        cleaned = sanitize_text(value, max_len=2000)
+        if not cleaned:
+            raise ValueError("prompt is required")
+        return cleaned
 
 
 class ReviewedEmail(StrictBaseModel):

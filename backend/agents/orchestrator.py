@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, Dict, List, Optional
 
 from backend.agents.action_agent import run_action_agent
@@ -13,6 +14,7 @@ from backend.agents.failure_recovery import get_recovery_engine, run_failure_rec
 from backend.agents.guardrails import validate_tools_used
 from backend.agents.outreach_agent import run_outreach_agent
 from backend.agents.prospecting_agent import run_prospecting_agent
+from backend.config.settings import settings
 from backend.models.schemas import (
     DealRisk,
     DigitalTwinProfileOutput,
@@ -32,6 +34,40 @@ def _terminal_agent_status(agent_name: str, output: Dict[str, Any]) -> None:
     status = str(output.get("status", "unknown")).lower()
     tag = "SUCCESS" if status == "success" else "FAILURE"
     print(f"[BACKEND][{agent_name}][{tag}] status={status}")
+
+
+def _record_agent_started(session_id: str, agent_name: str, input_summary: str) -> None:
+    record_audit(
+        session_id=session_id,
+        agent_name=agent_name,
+        action="agent_started",
+        input_summary=input_summary,
+        output_summary=f"{agent_name} execution started.",
+        status="pending",
+        reasoning=f"Starting {agent_name}.",
+        confidence=0.0,
+    )
+
+
+def _pause_between_agents(session_id: str, previous_agent: str, next_agent: str) -> None:
+    delay_seconds = float(settings.agent_inter_call_delay_seconds or 0.0)
+    if delay_seconds <= 0.0:
+        return
+
+    print(
+        f"[BACKEND][orchestrator][INFO] cooldown={delay_seconds:.2f}s previous={previous_agent} next={next_agent}"
+    )
+    record_audit(
+        session_id=session_id,
+        agent_name="orchestrator",
+        action="agent_cooldown",
+        input_summary=f"{previous_agent} -> {next_agent}",
+        output_summary=f"Cooldown {delay_seconds:.2f}s before running {next_agent}.",
+        status="pending",
+        reasoning="Applying configured delay between sequential agent executions to reduce burst rate-limit failures.",
+        confidence=0.0,
+    )
+    time.sleep(delay_seconds)
 
 ALLOWED_TOOLS_BY_TASK: Dict[str, List[str]] = {
     "cold_outreach": ["scraping_tool", "vector_memory", "llm", "email_tool", "crm_tool"],
@@ -134,6 +170,7 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
     agent_outputs: Dict[str, Any] = {}
     completed_agents: List[str] = []
     failed_agents: List[str] = []
+    last_completed_agent: Optional[str] = None
 
     record_audit(
         session_id=session_id,
@@ -148,6 +185,7 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
     )
 
     if task_type == "cold_outreach":
+        _record_agent_started(session_id, "prospecting_agent", f"Company: {input_data.get('company', '')}")
         prospecting = _execute_agent(
             "prospecting_agent",
             run_prospecting_agent,
@@ -165,7 +203,11 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
         agent_outputs["prospecting_agent"] = prospecting
         _terminal_agent_status("prospecting_agent", prospecting)
         (completed_agents if prospecting.get("status") == "success" else failed_agents).append("prospecting_agent")
+        last_completed_agent = "prospecting_agent"
 
+        _pause_between_agents(session_id, "prospecting_agent", "digital_twin_agent")
+
+        _record_agent_started(session_id, "digital_twin_agent", f"Company: {input_data.get('company', '')}")
         twin = _execute_agent(
             "digital_twin_agent",
             run_digital_twin_agent,
@@ -182,7 +224,11 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
         agent_outputs["digital_twin_agent"] = twin
         _terminal_agent_status("digital_twin_agent", twin)
         (completed_agents if twin.get("status") == "success" else failed_agents).append("digital_twin_agent")
+        last_completed_agent = "digital_twin_agent"
 
+        _pause_between_agents(session_id, "digital_twin_agent", "outreach_agent")
+
+        _record_agent_started(session_id, "outreach_agent", f"Company: {input_data.get('company', '')}")
         outreach = _execute_agent(
             "outreach_agent",
             run_outreach_agent,
@@ -198,7 +244,11 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
         )
         agent_outputs["outreach_agent"] = outreach
         (completed_agents if outreach.get("status") == "success" else failed_agents).append("outreach_agent")
+        last_completed_agent = "outreach_agent"
 
+        _pause_between_agents(session_id, "outreach_agent", "action_agent")
+
+        _record_agent_started(session_id, "action_agent", f"auto_send={bool(input_data.get('auto_send', False))}")
         if not input_data.get("auto_send", False):
             action = build_agent_response(
                 status="success",
@@ -217,6 +267,16 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
                 agent_name="action_agent",
                 tools_used=[],
             )
+            record_audit(
+                session_id=session_id,
+                agent_name="action_agent",
+                action="skip_send_sequences",
+                input_summary="Auto-send disabled.",
+                output_summary="Skipped sequence sending and returned drafts for human review.",
+                status="success",
+                reasoning="Auto-send disabled by request.",
+                confidence=1.0,
+            )
         else:
             action = _execute_agent(
                 "action_agent",
@@ -231,7 +291,11 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
             )
         agent_outputs["action_agent"] = action
         (completed_agents if action.get("status") == "success" else failed_agents).append("action_agent")
+        last_completed_agent = "action_agent"
 
+        _pause_between_agents(session_id, "action_agent", "crm_auditor_agent")
+
+        _record_agent_started(session_id, "crm_auditor_agent", "Evaluating CRM health after outreach generation.")
         crm_audit = _execute_agent(
             "crm_auditor_agent",
             run_crm_auditor_agent,
@@ -240,8 +304,10 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
         )
         agent_outputs["crm_auditor_agent"] = crm_audit
         (completed_agents if crm_audit.get("status") == "success" else failed_agents).append("crm_auditor_agent")
+        last_completed_agent = "crm_auditor_agent"
 
     elif task_type == "risk_detection":
+        _record_agent_started(session_id, "deal_intelligence_agent", "Analyzing risk signals for requested deals.")
         deal_intel = _execute_agent(
             "deal_intelligence_agent",
             run_deal_intelligence_agent,
@@ -255,7 +321,11 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
         )
         agent_outputs["deal_intelligence_agent"] = deal_intel
         (completed_agents if deal_intel.get("status") == "success" else failed_agents).append("deal_intelligence_agent")
+        last_completed_agent = "deal_intelligence_agent"
 
+        _pause_between_agents(session_id, "deal_intelligence_agent", "crm_auditor_agent")
+
+        _record_agent_started(session_id, "crm_auditor_agent", "Running CRM audit for detected risk context.")
         crm_audit = _execute_agent(
             "crm_auditor_agent",
             run_crm_auditor_agent,
@@ -264,12 +334,16 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
         )
         agent_outputs["crm_auditor_agent"] = crm_audit
         (completed_agents if crm_audit.get("status") == "success" else failed_agents).append("crm_auditor_agent")
+        last_completed_agent = "crm_auditor_agent"
 
         high_risks = [
             risk
             for risk in deal_intel.get("data", {}).get("risks", [])
             if risk.get("risk_level") in {"critical", "high"}
         ][:5]
+        _pause_between_agents(session_id, "crm_auditor_agent", "action_agent")
+
+        _record_agent_started(session_id, "action_agent", f"Preparing follow-up actions for {len(high_risks)} high-risk deal(s).")
         action = _execute_agent(
             "action_agent",
             run_action_agent,
@@ -278,8 +352,10 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
         )
         agent_outputs["action_agent"] = action
         (completed_agents if action.get("status") == "success" else failed_agents).append("action_agent")
+        last_completed_agent = "action_agent"
 
     elif task_type == "churn_prediction":
+        _record_agent_started(session_id, "churn_agent", "Computing churn risk and retention strategy.")
         churn = _execute_agent(
             "churn_agent",
             run_churn_agent,
@@ -293,7 +369,11 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
         )
         agent_outputs["churn_agent"] = churn
         (completed_agents if churn.get("status") == "success" else failed_agents).append("churn_agent")
+        last_completed_agent = "churn_agent"
 
+        _pause_between_agents(session_id, "churn_agent", "action_agent")
+
+        _record_agent_started(session_id, "action_agent", "Executing retention outreach actions.")
         action = _execute_agent(
             "action_agent",
             run_action_agent,
@@ -307,6 +387,7 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
         )
         agent_outputs["action_agent"] = action
         (completed_agents if action.get("status") == "success" else failed_agents).append("action_agent")
+        last_completed_agent = "action_agent"
 
     escalated = False
     if failed_agents:
@@ -317,7 +398,12 @@ def _execute_workflow(task_type: str, input_data: Dict[str, Any], session_id: st
         )
         agent_outputs["failure_recovery"] = recovery
         escalated = bool(recovery.get("data", {}).get("escalated", False))
+        last_completed_agent = "failure_recovery"
 
+    if last_completed_agent:
+        _pause_between_agents(session_id, last_completed_agent, "explainability_agent")
+
+    _record_agent_started(session_id, "explainability_agent", f"Summarizing workflow decisions for task={task_type}.")
     explainability = _execute_agent(
         "explainability_agent",
         run_explainability_agent,

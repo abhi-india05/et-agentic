@@ -14,6 +14,8 @@ from backend.memory.vector_store import get_vector_store
 from backend.models.schemas import (
     SendEmailRequest,
     SendSequencesRequest,
+    SingleLeadSendRequest,
+    ReviewedSequence,
     OutreachEntryStatus,
 )
 from backend.repositories.sessions import SessionRepository
@@ -23,7 +25,7 @@ from backend.tools.crm_tool import get_all_accounts, get_pipeline_stats
 from backend.tools.email_tool import get_email_client, get_email_stats, get_sent_emails
 from backend.utils.errors import APIError
 from backend.utils.helpers import clamp_page_size, generate_session_id, now_iso
-from backend.utils.logger import query_audit_logs
+from backend.utils.logger import query_audit_logs, delete_audit_log, clear_audit_logs
 
 router = APIRouter(tags=["admin"])
 
@@ -168,10 +170,33 @@ async def send_email(
 
 @router.post("/send-sequences")
 async def send_sequences(
-    req: SendSequencesRequest,
+    req: SendSequencesRequest | SingleLeadSendRequest,
     user: AuthUser = Depends(get_current_user),
     entry_repo: OutreachEntryRepository = Depends(get_outreach_entry_repo),
 ) -> Dict[str, Any]:
+    if isinstance(req, SingleLeadSendRequest):
+        single_email_payload = [
+            {
+                "subject": req.subject or "Outreach message",
+                "body": req.content,
+                "from_email": req.from_email,
+                "from_name": req.from_name,
+            }
+        ]
+        req = SendSequencesRequest(
+            sequences=[
+                ReviewedSequence(
+                    lead_id=req.lead_id,
+                    lead_name=req.lead_name or "",
+                    lead_email=req.email,
+                    email=req.email,
+                    sequence_id=req.sequence_id,
+                    content=req.content,
+                    emails=single_email_payload,
+                )
+            ]
+        )
+
     client = get_email_client()
     results: List[Dict[str, Any]] = []
     total_sent = 0
@@ -234,6 +259,35 @@ async def send_sequences(
             "sent": total_sent,
             "failed": total_failed,
         },
+        "timestamp": now_iso(),
+    }
+
+
+@router.delete("/logs/{log_id}")
+async def delete_log(
+    log_id: str,
+    user: AuthUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    deleted = delete_audit_log(
+        log_id=log_id,
+        user_id=None if user.is_admin else user.user_id,
+    )
+    if not deleted:
+        raise APIError(status_code=404, code="not_found", message="Log not found")
+    return {"deleted": 1, "log_id": log_id, "timestamp": now_iso()}
+
+
+@router.delete("/logs")
+async def clear_logs(
+    session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    user: AuthUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    scoped_user_id = user_id if user.is_admin and user_id else user.user_id
+    deleted = clear_audit_logs(user_id=scoped_user_id, session_id=session_id)
+    return {
+        "deleted": deleted,
+        "session_id": session_id,
         "timestamp": now_iso(),
     }
 

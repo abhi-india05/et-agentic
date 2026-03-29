@@ -6,9 +6,7 @@ from typing import Any, Dict, List
 from tenacity import stop_after_attempt, wait_exponential
 from tenacity import retry as tenacity_retry
 
-from backend.agents.guardrails import parse_llm_json
 from backend.config.settings import settings
-from backend.llm.client import get_llm_client
 from pydantic import Field
 
 from backend.models.schemas import StrictBaseModel
@@ -17,7 +15,6 @@ from backend.utils.helpers import build_agent_response, days_since
 from backend.utils.logger import get_logger, record_audit
 
 logger = get_logger("crm_auditor_agent")
-
 
 def _terminal_log(level: str, message: str) -> None:
     print(f"[BACKEND][crm_auditor_agent][{level.upper()}] {message}")
@@ -29,7 +26,6 @@ STUCK_STAGE_THRESHOLDS = {
     "Prospecting": 30,
 }
 
-
 class CRMAuditRecommendation(StrictBaseModel):
     audit_score: int
     health_rating: str
@@ -38,7 +34,6 @@ class CRMAuditRecommendation(StrictBaseModel):
     immediate_actions: List[str] = Field(default_factory=list)
     revenue_recovery_potential: float = 0.0
     recommendations_summary: str
-
 
 def detect_crm_anomalies(accounts: List[Dict[str, Any]]) -> Dict[str, Any]:
     missed_followups = []
@@ -94,21 +89,16 @@ def detect_crm_anomalies(accounts: List[Dict[str, Any]]) -> Dict[str, Any]:
         "revenue_at_risk": revenue_at_risk,
     }
 
-
 @tenacity_retry(stop=stop_after_attempt(settings.max_retries + 1), wait=wait_exponential(min=1, max=4))
 def _call_llm(prompt: str) -> CRMAuditRecommendation:
-    client = get_llm_client()
-    response = client.chat.completions.create(
-        model=settings.openai_model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
-        max_tokens=800,
-    )
-    llm_output = response.choices[0].message.content or ""
-    _terminal_log("success", f"LLM raw output: {llm_output}")
-    logger.info("crm_auditor_llm_output", output=llm_output)
-    return parse_llm_json(llm_output, CRMAuditRecommendation)
-
+    from backend.llm.gemini_client import call_gemini
+    
+    try:
+        response = call_gemini(prompt, structured=True, temperature=0.3)
+        return CRMAuditRecommendation(**response)
+    except Exception as e:
+        logger.error("crm_auditor_llm_failed", error=str(e))
+        raise RuntimeError(f"CRM auditor recommendation generation failed: {e}") from e
 
 def run_crm_auditor_agent(session_id: str, user_id: str) -> Dict[str, Any]:
     if not user_id:
@@ -118,35 +108,36 @@ def run_crm_auditor_agent(session_id: str, user_id: str) -> Dict[str, Any]:
     accounts = get_all_accounts(user_id=user_id)
     anomalies = detect_crm_anomalies(accounts)
     pipeline_stats = get_pipeline_stats(user_id=user_id)
-    try:
-        recommendations = _call_llm(
-            f"""You are a CRM audit specialist. Analyze this CRM audit data and provide strategic recommendations.
+    
+    prompt = f"""You are a CRM audit specialist. Analyze this CRM audit data and provide strategic recommendations.
 
 Pipeline Stats: {json.dumps(pipeline_stats, indent=2)}
 Audit Findings: {json.dumps(anomalies, indent=2)}
 
 Return ONLY valid JSON with:
 {{
-  \"audit_score\": 72,
-  \"health_rating\": \"Fair | Good | Poor | Critical\",
-  \"top_priorities\": [{{\"priority\": 1, \"action\": \"Specific action\", \"impact\": \"Expected impact\", \"deals_affected\": 3}}],
-  \"process_gaps\": [\"gap 1\"],
-  \"immediate_actions\": [\"action 1\"],
-  \"revenue_recovery_potential\": 450000,
-  \"recommendations_summary\": \"Brief assessment\"
+  "audit_score": 72,
+  "health_rating": "Fair | Good | Poor | Critical",
+  "top_priorities": [{{"priority": 1, "action": "Specific action", "impact": "Expected impact", "deals_affected": 3}}],
+  "process_gaps": ["gap 1"],
+  "immediate_actions": ["action 1"],
+  "revenue_recovery_potential": 450000,
+  "recommendations_summary": "Brief assessment"
 }}"""
-        ).model_dump()
+
+    try:
+        recommendations = _call_llm(prompt).model_dump()
     except Exception as exc:
         logger.warning("crm_auditor_llm_failed", error=str(exc))
         _terminal_log("failure", f"LLM CRM audit recommendation failed: {exc}")
         recommendations = {
-            "audit_score": 65,
-            "health_rating": "Fair",
+            "audit_score": 0,
+            "health_rating": "Poor",
             "top_priorities": [],
-            "process_gaps": ["Manual follow-up tracking", "Inconsistent stage progression"],
-            "immediate_actions": ["Review stuck deals", "Schedule follow-ups"],
-            "revenue_recovery_potential": anomalies["revenue_at_risk"],
-            "recommendations_summary": "CRM audit complete. Multiple deals require attention.",
+            "process_gaps": ["Error processing audit"],
+            "immediate_actions": [],
+            "revenue_recovery_potential": 0.0,
+            "recommendations_summary": "Failed to generate recommendations",
         }
 
     data = {

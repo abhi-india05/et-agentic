@@ -5,9 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from backend.agents.guardrails import parse_llm_json
 from backend.config.settings import settings
-from backend.llm.client import get_llm_client
 from backend.memory.vector_store import get_vector_store
 from backend.models.schemas import DealRisk
 from backend.tools.crm_tool import get_at_risk_deals
@@ -24,6 +22,8 @@ def _terminal_log(level: str, message: str) -> None:
 
 @retry(stop=stop_after_attempt(settings.max_retries + 1), wait=wait_exponential(min=1, max=4))
 def analyze_deal_risk(account: Dict[str, Any]) -> DealRisk:
+    from backend.llm.gemini_client import call_gemini
+
     signals = detect_intent_signals(account.get("company", ""), account)
     prompt = f"""You are an expert deal intelligence analyst.
 
@@ -36,54 +36,28 @@ External Signals:
 
 Return ONLY valid JSON:
 {{
-  \"deal_id\": \"{account.get('account_id')}\",
-  \"company\": \"{account.get('company')}\",
-  \"risk_level\": \"critical | high | medium | low\",
-  \"risk_score\": 0.85,
-  \"risk_signals\": [\"signal\"],
-  \"competitor_threat\": true,
-  \"competitor_name\": \"Competitor or null\",
-  \"deal_velocity\": \"stalled | slow | on_track | accelerating\",
-  \"days_inactive\": {account.get('days_inactive', 0)},
-  \"recovery_strategy\": \"Specific plan that reflects the product capabilities\",
-  \"recommended_actions\": [\"action 1\"],
-  \"escalate_to_manager\": true,
-  \"predicted_close_probability\": 0.45,
-  \"reasoning\": \"Detailed explanation\"
+  "deal_id": "{account.get('account_id')}",
+  "company": "{account.get('company')}",
+  "risk_level": "critical | high | medium | low",
+  "risk_score": 0.85,
+  "risk_signals": ["signal"],
+  "competitor_threat": true,
+  "competitor_name": "Competitor or null",
+  "deal_velocity": "stalled | slow | on_track | accelerating",
+  "days_inactive": {account.get('days_inactive', 0)},
+  "recovery_strategy": "Specific plan that reflects the product capabilities",
+  "recommended_actions": ["action 1"],
+  "escalate_to_manager": true,
+  "predicted_close_probability": 0.45,
+  "reasoning": "Detailed explanation"
 }}"""
-    response = get_llm_client().chat.completions.create(
-        model=settings.openai_model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
-        max_tokens=1000,
-    )
-    llm_output = response.choices[0].message.content or ""
-    _terminal_log("success", f"LLM raw output: {llm_output}")
-    logger.info("deal_intelligence_llm_output", output=llm_output)
-    return parse_llm_json(llm_output, DealRisk)
 
-
-def _fallback_risk(account: Dict[str, Any]) -> DealRisk:
-    days_inactive = int(account.get("days_inactive", 0))
-    return DealRisk(
-        deal_id=account.get("account_id", ""),
-        company=account.get("company", "Unknown"),
-        risk_level="critical" if days_inactive >= 30 else "high",
-        risk_score=0.82 if days_inactive >= 30 else 0.68,
-        risk_signals=[f"Inactive for {days_inactive} days", "Buyer engagement is weakening"],
-        competitor_threat=False,
-        competitor_name=None,
-        deal_velocity="stalled",
-        days_inactive=days_inactive,
-        recovery_strategy=(
-            "Demonstrate how the team can surface deal risk earlier. "
-            "Re-engage with a focused executive summary and a short working session."
-        ),
-        recommended_actions=["Send executive follow-up", "Book a recovery workshop", "Share tailored ROI snapshot"],
-        escalate_to_manager=days_inactive >= 30,
-        predicted_close_probability=0.28,
-        reasoning="Rule-based fallback classified the deal as at risk due to inactivity threshold breach.",
-    )
+    try:
+        response = call_gemini(prompt, structured=True, temperature=0.3)
+        return DealRisk(**response)
+    except Exception as e:
+        logger.error("deal_intelligence_llm_failed", error=str(e))
+        raise RuntimeError(f"Deal intelligence LLM failed: {e}") from e
 
 
 def run_deal_intelligence_agent(
@@ -129,7 +103,9 @@ def run_deal_intelligence_agent(
         except Exception as exc:
             logger.warning("deal_risk_llm_failed", account_id=account.get("account_id"), error=str(exc))
             _terminal_log("failure", f"LLM risk analysis failed for account {account.get('account_id', 'unknown')}: {exc}")
-            analyzed.append(_fallback_risk(account).model_dump())
+            raise RuntimeError(
+                f"Deal intelligence analysis failed for account {account.get('account_id', 'unknown')}: {exc}"
+            ) from exc
 
     analyzed.sort(key=lambda item: item.get("risk_score", 0.0), reverse=True)
     critical_count = len([item for item in analyzed if item.get("risk_level") in {"critical", "high"}])

@@ -1,5 +1,5 @@
-import { ChevronDown, ChevronUp, ExternalLink, History, Mail, Play, RotateCcw, User, Zap } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { ChevronDown, ChevronUp, ExternalLink, History, Mail, Play, RotateCcw, Sparkles, Trash2, User, X, Zap } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { useParams } from 'react-router-dom'
 import AgentFlow from '../components/AgentFlow.jsx'
@@ -10,6 +10,100 @@ import { fmt } from '../utils/fmt.js'
 const INDUSTRIES = ['SaaS', 'Healthcare', 'Finance', 'Logistics', 'Retail', 'Manufacturing', 'CleanTech', 'AI/ML', 'Cybersecurity', 'EdTech']
 const SIZES = ['1-50', '51-200', '201-500', '501-2000', '2000+']
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const COLD_OUTREACH_AGENT_SEQUENCE = ['prospecting_agent', 'digital_twin_agent', 'outreach_agent', 'action_agent', 'crm_auditor_agent', 'explainability_agent']
+
+function createClientSessionId() {
+  return `sess_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+}
+
+function toAgentLabel(agentName) {
+  return String(agentName || '')
+    .replace(/_agent$/i, '')
+    .replace(/_/g, ' ')
+    .trim()
+}
+
+function inferRunningAgent(logItems) {
+  if (!Array.isArray(logItems) || logItems.length === 0) {
+    return 'orchestrator'
+  }
+
+  const ordered = [...logItems].sort((a, b) => {
+    const left = Date.parse(a?.timestamp || '') || 0
+    const right = Date.parse(b?.timestamp || '') || 0
+    return left - right
+  })
+
+  const latestStartByAgent = new Map()
+  const latestCompletionByAgent = new Map()
+
+  ordered.forEach((log) => {
+    const agent = String(log?.agent_name || '')
+    const action = String(log?.action || '')
+    const status = String(log?.status || '')
+    const timestamp = Date.parse(log?.timestamp || '') || 0
+
+    if (!agent || agent === 'orchestrator') {
+      return
+    }
+
+    if (action === 'agent_started' && status === 'pending') {
+      latestStartByAgent.set(agent, timestamp)
+      return
+    }
+
+    if (status === 'success' || status === 'failure' || status === 'escalated') {
+      latestCompletionByAgent.set(agent, timestamp)
+    }
+  })
+
+  let activeAgent = ''
+  let activeStartTime = -1
+  latestStartByAgent.forEach((startTime, agent) => {
+    const completionTime = latestCompletionByAgent.get(agent) || -1
+    if (startTime > completionTime && startTime > activeStartTime) {
+      activeStartTime = startTime
+      activeAgent = agent
+    }
+  })
+
+  if (activeAgent) {
+    return activeAgent
+  }
+
+  const latestCompleted = [...ordered]
+    .reverse()
+    .find((log) => {
+      const status = String(log?.status || '')
+      const agent = String(log?.agent_name || '')
+      return agent && agent !== 'orchestrator' && (status === 'success' || status === 'failure' || status === 'escalated')
+    })
+
+  if (latestCompleted?.agent_name) {
+    const completedAgent = String(latestCompleted.agent_name)
+    const idx = COLD_OUTREACH_AGENT_SEQUENCE.indexOf(completedAgent)
+    if (idx >= 0 && idx + 1 < COLD_OUTREACH_AGENT_SEQUENCE.length) {
+      return COLD_OUTREACH_AGENT_SEQUENCE[idx + 1]
+    }
+  }
+
+  const finalized = ordered.some((log) => log?.agent_name === 'orchestrator' && log?.action === 'finalize')
+  if (finalized) {
+    return 'finalizing'
+  }
+
+  return 'orchestrator'
+}
+
+function buildWorkflowLoadingMessage(agentName) {
+  if (!agentName || agentName === 'orchestrator') {
+    return 'Preparing workflow plan...'
+  }
+  if (agentName === 'finalizing') {
+    return 'Finalizing workflow output...'
+  }
+  return `Running ${toAgentLabel(agentName)}...`
+}
 
 function getLeadKey(sequence, index = 0) {
   return sequence?.lead_id || sequence?.sequence_id || sequence?.lead_email || `lead-${index}`
@@ -286,6 +380,71 @@ function LogsTab({ sessionId }) {
   const [sendSummary, setSendSummary] = useState(null)
   const [editedEmails, setEditedEmails] = useState({})
   const [emailErrors, setEmailErrors] = useState({})
+  const [sendingState, setSendingState] = useState({})
+  const [leadSendFeedback, setLeadSendFeedback] = useState({})
+  const [refineTarget, setRefineTarget] = useState(null)
+  const [refinePrompt, setRefinePrompt] = useState('')
+  const [refiningEmail, setRefiningEmail] = useState(false)
+  const [refineError, setRefineError] = useState(null)
+  const [refineExplanationByEmail, setRefineExplanationByEmail] = useState({})
+  const [logs, setLogs] = useState([])
+  const [logsLoading, setLogsLoading] = useState(false)
+  const [logsError, setLogsError] = useState(null)
+  const [deletingLogId, setDeletingLogId] = useState('')
+  const [clearingLogs, setClearingLogs] = useState(false)
+  const [runningSessionId, setRunningSessionId] = useState(sessionId || '')
+  const [runningAgent, setRunningAgent] = useState('')
+  const progressPollRef = useRef(null)
+
+  function stopProgressPolling() {
+    if (progressPollRef.current) {
+      window.clearInterval(progressPollRef.current)
+      progressPollRef.current = null
+    }
+  }
+
+  async function loadLogs(targetSessionId = runningSessionId || sessionId, options = {}) {
+    const silent = Boolean(options.silent)
+    if (!targetSessionId) {
+      setLogs([])
+      return []
+    }
+
+    if (!silent) {
+      setLogsLoading(true)
+      setLogsError(null)
+    }
+
+    try {
+      const response = await api.logs(targetSessionId)
+      const items = response.logs || []
+      setLogs(items)
+      return items
+    } catch (e) {
+      if (!silent) {
+        setLogsError(e.message)
+      }
+      return []
+    } finally {
+      if (!silent) {
+        setLogsLoading(false)
+      }
+    }
+  }
+
+  async function refreshRunningAgent(targetSessionId) {
+    const items = await loadLogs(targetSessionId, { silent: true })
+    setRunningAgent(inferRunningAgent(items))
+  }
+
+  function startProgressPolling(targetSessionId) {
+    stopProgressPolling()
+    setRunningAgent('orchestrator')
+    void refreshRunningAgent(targetSessionId)
+    progressPollRef.current = window.setInterval(() => {
+      void refreshRunningAgent(targetSessionId)
+    }, 1500)
+  }
 
   function logAgentTerminalStatus(finalOutput, source) {
     const outputs = finalOutput?.agent_outputs || {}
@@ -296,6 +455,17 @@ function LogsTab({ sessionId }) {
     console.log(`[FRONTEND][${source}][prospecting_agent][${prospectingTag}] status=${prospectingStatus}`)
     console.log(`[FRONTEND][${source}][digital_twin_agent][${digitalTwinTag}] status=${digitalTwinStatus}`)
   }
+
+  useEffect(() => {
+    setRunningSessionId(sessionId || '')
+    void loadLogs(sessionId)
+  }, [sessionId])
+
+  useEffect(() => {
+    return () => {
+      stopProgressPolling()
+    }
+  }, [])
 
   useEffect(() => {
     if (!sessionId) {
@@ -350,7 +520,9 @@ function LogsTab({ sessionId }) {
           status: session.status || hydratedFinalOutput.status || 'completed',
           data: hydratedFinalOutput,
         })
+        setRunningSessionId(session.session_id)
         logAgentTerminalStatus(hydratedFinalOutput, 'resume-load')
+        await loadLogs(session.session_id)
       } catch (e) {
         if (cancelled) return
         setError(e.message)
@@ -408,10 +580,46 @@ function LogsTab({ sessionId }) {
     })
     setEditedEmails(nextEditedEmails)
     setEmailErrors({})
+    setSendingState({})
+    setLeadSendFeedback({})
+    setRefineExplanationByEmail({})
+    setRefinePrompt('')
+    setRefineTarget(null)
+    setRefineError(null)
   }, [sequences])
+
+  function getRecipientEmail(seq, seqIdx) {
+    const leadKey = getLeadKey(seq, seqIdx)
+    return String(editedEmails[leadKey] ?? seq.lead_email ?? '').trim()
+  }
+
+  function validateRecipient(seq, seqIdx) {
+    const leadKey = getLeadKey(seq, seqIdx)
+    const recipientEmail = getRecipientEmail(seq, seqIdx)
+    if (!EMAIL_RE.test(recipientEmail)) {
+      setEmailErrors((prev) => ({
+        ...prev,
+        [leadKey]: recipientEmail ? 'Invalid email format' : 'Enter recipient email',
+      }))
+      return { valid: false, leadKey, recipientEmail }
+    }
+
+    setEmailErrors((prev) => {
+      if (!prev[leadKey]) return prev
+      const next = { ...prev }
+      delete next[leadKey]
+      return next
+    })
+    return { valid: true, leadKey, recipientEmail }
+  }
 
   async function runWorkflow({ clearExisting } = { clearExisting: true }) {
     if (!form.company.trim()) return
+    const workflowSessionId = createClientSessionId()
+    setRunningSessionId(workflowSessionId)
+    setRunningAgent('orchestrator')
+    startProgressPolling(workflowSessionId)
+
     setLoading(true)
     if (clearExisting) {
       setResult(null)
@@ -419,7 +627,7 @@ function LogsTab({ sessionId }) {
     setError(null)
     setSendSummary(null)
     try {
-      const payload = { ...form }
+      const payload = { ...form, session_id: workflowSessionId }
       if (payload.website && !payload.website.startsWith('http')) {
         payload.website = 'https://' + payload.website
       }
@@ -427,13 +635,21 @@ function LogsTab({ sessionId }) {
         if (payload[k] === '') payload[k] = null
       })
       const res = await api.runOutreach(payload)
+      stopProgressPolling()
+      setRunningAgent('finalizing')
+      const resolvedSessionId = res?.session_id || workflowSessionId
+      setRunningSessionId(resolvedSessionId)
       setResult(res)
       logAgentTerminalStatus(res?.data || {}, 'run-outreach')
+      await loadLogs(resolvedSessionId)
       toast.success(sessionId ? 'Workflow continued successfully' : 'Outreach campaign launched successfully')
     } catch (e) {
+      stopProgressPolling()
       setError(e.message)
       console.error(`[FRONTEND][run-outreach][FAILURE] ${e.message}`)
+      await loadLogs(workflowSessionId, { silent: true })
     } finally {
+      setRunningAgent('')
       setLoading(false)
     }
   }
@@ -515,11 +731,179 @@ function LogsTab({ sessionId }) {
       }
       const res = await api.sendSequences(payload)
       setSendSummary(res.summary || null)
+      setLeadSendFeedback({})
       toast.success('Sequences sent successfully')
     } catch (e) {
       setError(e.message)
     } finally {
       setSendingDrafts(false)
+    }
+  }
+
+  async function handleSendSingleEmail(seqIdx, emailIdx) {
+    const seq = draftSequences[seqIdx]
+    if (!seq) return
+
+    const { valid, leadKey, recipientEmail } = validateRecipient(seq, seqIdx)
+    if (!valid) {
+      setError('Please fix the recipient email before sending this email.')
+      toast.error('Please fix the recipient email before sending this email.')
+      return
+    }
+
+    const selectedEmail = seq.emails[emailIdx] || { subject: '', body: '' }
+    setSendingState((prev) => ({ ...prev, [leadKey]: true }))
+    setLeadSendFeedback((prev) => {
+      const next = { ...prev }
+      delete next[leadKey]
+      return next
+    })
+    setError(null)
+
+    try {
+      const response = await api.sendLeadEmail({
+        lead_id: seq.lead_id || leadKey,
+        lead_name: seq.lead_name,
+        sequence_id: seq.sequence_id,
+        email: recipientEmail,
+        subject: selectedEmail.subject,
+        content: selectedEmail.body,
+        from_name: sender.from_name,
+        from_email: sender.from_email,
+      })
+
+      const sent = response?.summary?.sent || 0
+      const failed = response?.summary?.failed || 0
+      if (sent > 0 && failed === 0) {
+        setLeadSendFeedback((prev) => ({
+          ...prev,
+          [leadKey]: { type: 'success', message: 'Email sent successfully for this lead.' },
+        }))
+        toast.success('Email sent successfully')
+      } else {
+        setLeadSendFeedback((prev) => ({
+          ...prev,
+          [leadKey]: { type: 'failure', message: `Email send result: sent ${sent}, failed ${failed}.` },
+        }))
+        toast.error('Email send reported failures')
+      }
+    } catch (e) {
+      setLeadSendFeedback((prev) => ({
+        ...prev,
+        [leadKey]: { type: 'failure', message: e.message || 'Failed to send email for this lead.' },
+      }))
+      setError(e.message)
+    } finally {
+      setSendingState((prev) => ({ ...prev, [leadKey]: false }))
+    }
+  }
+
+  function openRefineModal(seqIdx, emailIdx) {
+    setRefineTarget({ seqIdx, emailIdx })
+    setRefinePrompt('')
+    setRefineError(null)
+  }
+
+  function closeRefineModal() {
+    if (refiningEmail) return
+    setRefineTarget(null)
+    setRefinePrompt('')
+    setRefineError(null)
+  }
+
+  async function handleRefineSubmit(e) {
+    e.preventDefault()
+    if (!refineTarget) return
+    if (!refinePrompt.trim()) {
+      setRefineError('Please provide a refinement prompt.')
+      return
+    }
+
+    const { seqIdx, emailIdx } = refineTarget
+    const seq = draftSequences[seqIdx]
+    if (!seq) return
+
+    const currentEmail = seq.emails[emailIdx]
+    if (!currentEmail) return
+
+    const leadKey = getLeadKey(seq, seqIdx)
+    const leadContext = leads[seqIdx] || {}
+    const twinContext = twins[seqIdx] || {}
+    const originalGenerated = sequences[seqIdx]?.emails?.[emailIdx] || {}
+
+    setRefiningEmail(true)
+    setRefineError(null)
+
+    try {
+      const res = await api.refineOutreachEmail({
+        lead_id: seq.lead_id || leadKey,
+        original_email: currentEmail.body,
+        prompt: refinePrompt.trim(),
+        lead_context: {
+          session_id: sessionId || result?.session_id || null,
+          lead: leadContext,
+          sequence: {
+            lead_id: seq.lead_id,
+            lead_name: seq.lead_name,
+            sequence_id: seq.sequence_id,
+            recipient_email: getRecipientEmail(seq, seqIdx),
+            subject: currentEmail.subject,
+          },
+        },
+        insights: {
+          digital_twin: twinContext,
+          outreach_explanation: originalGenerated?.explanation || {},
+        },
+      })
+
+      updateDraftEmail(seqIdx, emailIdx, 'body', res.refined_email || currentEmail.body)
+      const explanationKey = `${leadKey}-${emailIdx}`
+      setRefineExplanationByEmail((prev) => ({
+        ...prev,
+        [explanationKey]: res.explanation || 'Refined using your prompt and available twin insights.',
+      }))
+      toast.success('Email refined with AI')
+      closeRefineModal()
+    } catch (e) {
+      setRefineError(e.message)
+    } finally {
+      setRefiningEmail(false)
+    }
+  }
+
+  async function handleDeleteLog(logId) {
+    if (!logId) return
+    const shouldDelete = window.confirm('Delete this log entry?')
+    if (!shouldDelete) return
+
+    setDeletingLogId(logId)
+    setLogsError(null)
+    try {
+      await api.deleteLog(logId)
+      setLogs((prev) => prev.filter((log) => log.log_id !== logId))
+      toast.success('Log entry deleted')
+    } catch (e) {
+      setLogsError(e.message)
+    } finally {
+      setDeletingLogId('')
+    }
+  }
+
+  async function handleClearAllLogs() {
+    if (!logs.length) return
+    const shouldClear = window.confirm('Clear all logs currently listed in this view?')
+    if (!shouldClear) return
+
+    setClearingLogs(true)
+    setLogsError(null)
+    try {
+      await api.clearLogs({ sessionId: runningSessionId || sessionId })
+      setLogs([])
+      toast.success('Logs cleared')
+    } catch (e) {
+      setLogsError(e.message)
+    } finally {
+      setClearingLogs(false)
     }
   }
 
@@ -652,7 +1036,12 @@ function LogsTab({ sessionId }) {
       </div>
 
       {hydratingSession && <LoadingState message="Loading saved outreach workflow..." />}
-      {loading && <LoadingState message="Orchestrating prospecting → digital twin → outreach agents…" />}
+      {loading && (
+        <LoadingState
+          message={buildWorkflowLoadingMessage(runningAgent)}
+          detail={runningSessionId ? `Session: ${runningSessionId}` : ''}
+        />
+      )}
       {error && <ErrorState message={error} />}
 
       {result && !loading && (
@@ -790,14 +1179,45 @@ function LogsTab({ sessionId }) {
                               rows={5}
                               className="w-full bg-void border border-border rounded-lg px-3 py-2 text-sm text-text focus:border-accent focus:outline-none resize-y font-mono"
                             />
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleSendSingleEmail(seqIdx, emailIdx)}
+                                disabled={!!sendingState[leadKey]}
+                                className="btn-ghost flex items-center gap-2 text-xs disabled:opacity-50"
+                              >
+                                <Mail className="w-3.5 h-3.5" />
+                                {sendingState[leadKey] ? 'Sending...' : 'Send This Email'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => openRefineModal(seqIdx, emailIdx)}
+                                disabled={refiningEmail}
+                                className="btn-ghost flex items-center gap-2 text-xs disabled:opacity-50"
+                              >
+                                <Sparkles className="w-3.5 h-3.5" />
+                                Refine with AI
+                              </button>
+                            </div>
+                            {refineExplanationByEmail[`${leadKey}-${emailIdx}`] && (
+                              <div className="text-xs text-muted leading-relaxed bg-void border border-border rounded-md px-2 py-1.5">
+                                AI note: {refineExplanationByEmail[`${leadKey}-${emailIdx}`]}
+                              </div>
+                            )}
                           </div>
                         ))}
+                        {leadSendFeedback[leadKey] && (
+                          <div className={`text-xs font-mono ${leadSendFeedback[leadKey].type === 'success' ? 'text-success' : 'text-danger'}`}>
+                            {leadSendFeedback[leadKey].message}
+                          </div>
+                        )}
                       </div>
                     )
                   })}
                 </div>
 
                 <button
+                  type="button"
                   onClick={handleSendReviewed}
                   disabled={sendingDrafts}
                   className="btn-primary flex items-center gap-2 disabled:opacity-50"
@@ -814,6 +1234,113 @@ function LogsTab({ sessionId }) {
               </div>
             </div>
           )}
+
+        </div>
+      )}
+
+      <div className="space-y-4">
+        <SectionHeader
+          title="Workflow Logs"
+          subtitle={`${logs.length} entries${(runningSessionId || sessionId) ? ' for this session' : ''}`}
+          action={
+            <button type="button" onClick={() => loadLogs(runningSessionId || sessionId)} className="btn-ghost text-xs" disabled={logsLoading}>
+              {logsLoading ? 'Refreshing...' : 'Refresh'}
+            </button>
+          }
+        />
+
+        <div className="card space-y-3">
+          {logsLoading && <LoadingState message="Loading logs..." />}
+          {logsError && !logsLoading && <ErrorState message={logsError} onRetry={() => loadLogs(runningSessionId || sessionId)} />}
+
+          {!logsLoading && !logsError && logs.length === 0 && (
+            <div className="text-sm text-muted text-center py-6 border border-dashed border-border rounded-lg">
+              No logs found.
+            </div>
+          )}
+
+          {!logsLoading && !logsError && logs.length > 0 && (
+            <div className="max-h-[20rem] overflow-y-auto custom-scrollbar pr-1 space-y-2">
+              {logs.map((log, idx) => (
+                <div key={log.log_id || `${log.timestamp}-${idx}`} className="border border-border rounded-lg p-3 bg-panel space-y-2">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-xs font-mono text-accent truncate">{log.agent_name || 'agent'} · {log.action || 'action'}</div>
+                      <div className="text-[11px] text-muted font-mono">{fmt.reltime(log.timestamp)}</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteLog(log.log_id)}
+                      disabled={!log.log_id || deletingLogId === log.log_id}
+                      className="btn-ghost text-xs flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      {deletingLogId === log.log_id ? 'Deleting...' : 'Delete'}
+                    </button>
+                  </div>
+                  <div className="text-xs text-text-dim leading-relaxed">{log.output_summary || 'No output summary available.'}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="pt-2 border-t border-border flex justify-end">
+            <button
+              type="button"
+              onClick={handleClearAllLogs}
+              disabled={clearingLogs || logsLoading || logs.length === 0}
+              className="btn-ghost text-xs flex items-center gap-2 disabled:opacity-50"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              {clearingLogs ? 'Clearing logs...' : 'Clear All Logs'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {refineTarget && (
+        <div className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="card w-full max-w-2xl space-y-4 border-accent/25">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-display font-700 text-text">Modify Email with Prompt</div>
+                <div className="text-xs text-muted mt-1">Example: Make this more concise and less salesy.</div>
+              </div>
+              <button
+                type="button"
+                onClick={closeRefineModal}
+                className="btn-ghost p-2"
+                disabled={refiningEmail}
+                aria-label="Close refine modal"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleRefineSubmit} className="space-y-3">
+              <label className="text-xs text-muted font-mono block">Modify Email with Prompt</label>
+              <textarea
+                value={refinePrompt}
+                onChange={e => setRefinePrompt(e.target.value)}
+                rows={5}
+                className="w-full bg-void border border-border rounded-lg px-3 py-2.5 text-sm text-text placeholder:text-muted focus:border-accent focus:outline-none resize-y"
+                placeholder="Make this more concise and less salesy"
+              />
+              {refineError && <div className="text-xs text-danger font-mono">{refineError}</div>}
+
+              <div className="flex items-center justify-end gap-2">
+                <button type="button" onClick={closeRefineModal} className="btn-ghost" disabled={refiningEmail}>Cancel</button>
+                <button
+                  type="submit"
+                  disabled={refiningEmail || !refinePrompt.trim()}
+                  className="btn-primary flex items-center gap-2 disabled:opacity-50"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  {refiningEmail ? 'Refining...' : 'Apply Refinement'}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

@@ -153,6 +153,82 @@ def reset_audit_store() -> None:
         _audit_store.clear()
 
 
+def _matches_audit_entry(
+    entry: Dict[str, Any],
+    *,
+    log_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> bool:
+    if log_id and entry.get("log_id") != log_id:
+        return False
+    if user_id and entry.get("user_id") != user_id:
+        return False
+    if session_id and entry.get("session_id") != session_id:
+        return False
+    return True
+
+
+def delete_audit_log(*, log_id: str, user_id: Optional[str] = None) -> bool:
+    global _audit_backend_disabled
+
+    memory_deleted = False
+    with _audit_lock:
+        retained: List[Dict[str, Any]] = []
+        for entry in _audit_store:
+            if not memory_deleted and _matches_audit_entry(entry, log_id=log_id, user_id=user_id):
+                memory_deleted = True
+                continue
+            retained.append(entry)
+        if memory_deleted:
+            _audit_store[:] = retained
+
+    db_deleted = False
+    if not _audit_backend_disabled and not settings.is_test:
+        try:
+            from backend.db.mongo import get_sync_database
+
+            filters: Dict[str, Any] = {"log_id": log_id}
+            if user_id:
+                filters["user_id"] = user_id
+            result = get_sync_database()["audit_logs"].delete_one(filters)
+            db_deleted = bool(result.deleted_count)
+        except Exception:
+            _audit_backend_disabled = True
+
+    return memory_deleted or db_deleted
+
+
+def clear_audit_logs(*, user_id: Optional[str] = None, session_id: Optional[str] = None) -> int:
+    global _audit_backend_disabled
+
+    with _audit_lock:
+        before = len(_audit_store)
+        _audit_store[:] = [
+            entry
+            for entry in _audit_store
+            if not _matches_audit_entry(entry, user_id=user_id, session_id=session_id)
+        ]
+        memory_deleted = before - len(_audit_store)
+
+    db_deleted = 0
+    if not _audit_backend_disabled and not settings.is_test:
+        try:
+            from backend.db.mongo import get_sync_database
+
+            filters: Dict[str, Any] = {}
+            if user_id:
+                filters["user_id"] = user_id
+            if session_id:
+                filters["session_id"] = session_id
+            result = get_sync_database()["audit_logs"].delete_many(filters)
+            db_deleted = int(result.deleted_count)
+        except Exception:
+            _audit_backend_disabled = True
+
+    return db_deleted if db_deleted > 0 else memory_deleted
+
+
 def _query_logs_from_memory(
     session_id: Optional[str],
     user_id: Optional[str],

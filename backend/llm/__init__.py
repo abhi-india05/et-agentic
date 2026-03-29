@@ -1,3 +1,3 @@
-from backend.llm.client import get_llm_client
+from backend.llm.gemini_client import call_gemini
 
-__all__ = ["get_llm_client"]
+__all__ = ["call_gemini"]

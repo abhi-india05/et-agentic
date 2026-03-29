@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
-import { ScrollText, RefreshCw, Search, Filter } from 'lucide-react'
-import { SectionHeader, LoadingState, ErrorState, ConfidenceBar } from '../components/UI.jsx'
+import { RefreshCw, Search, Trash2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { ConfidenceBar, ErrorState, LoadingState, SectionHeader } from '../components/UI.jsx'
 import { api } from '../services/api.js'
 import { fmt } from '../utils/fmt.js'
 
@@ -12,7 +12,7 @@ const STATUS_DOT = {
   escalated: 'bg-danger animate-pulse',
 }
 
-function LogRow({ log, expanded, onToggle }) {
+function LogRow({ log, expanded, onToggle, onDelete, deleting }) {
   const dot = STATUS_DOT[log.status] || 'bg-muted'
 
   return (
@@ -35,6 +35,18 @@ function LogRow({ log, expanded, onToggle }) {
           <span className="text-xs text-muted">{expanded ? '▴' : '▾'}</span>
         </div>
       </button>
+
+      <div className="px-4 pb-2 flex justify-end">
+        <button
+          type="button"
+          onClick={onDelete}
+          disabled={!log.log_id || deleting}
+          className="btn-ghost text-xs flex items-center gap-1.5 disabled:opacity-50"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+          {deleting ? 'Deleting...' : 'Delete'}
+        </button>
+      </div>
 
       {expanded && (
         <div className="px-4 pb-4 pt-1 space-y-3 bg-void/50">
@@ -78,6 +90,8 @@ export default function LogsPage() {
   const [filterAgent, setFilterAgent] = useState('all')
   const [filterStatus, setFilterStatus] = useState('all')
   const [expanded, setExpanded] = useState(null)
+  const [deletingLogId, setDeletingLogId] = useState('')
+  const [clearingLogs, setClearingLogs] = useState(false)
 
   useEffect(() => { load() }, [])
 
@@ -91,6 +105,42 @@ export default function LogsPage() {
       setError(e.message)
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function deleteLog(logId) {
+    if (!logId) return
+    const confirmed = window.confirm('Delete this log entry?')
+    if (!confirmed) return
+
+    setDeletingLogId(logId)
+    try {
+      await api.deleteLog(logId)
+      setLogs(prev => prev.filter(log => log.log_id !== logId))
+      if (expanded !== null && filtered[expanded]?.log_id === logId) {
+        setExpanded(null)
+      }
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setDeletingLogId('')
+    }
+  }
+
+  async function clearAllLogs() {
+    if (!logs.length) return
+    const confirmed = window.confirm('Clear all logs?')
+    if (!confirmed) return
+
+    setClearingLogs(true)
+    try {
+      await api.clearLogs()
+      setLogs([])
+      setExpanded(null)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setClearingLogs(false)
     }
   }
 
@@ -114,9 +164,20 @@ export default function LogsPage() {
           title="Audit Logs"
           subtitle={`${logs.length} total entries · ${successCount} success · ${failCount} failed`}
         />
-        <button onClick={load} className="btn-ghost flex items-center gap-2 text-xs">
-          <RefreshCw className="w-3.5 h-3.5" /> Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={clearAllLogs}
+            disabled={clearingLogs || logs.length === 0}
+            className="btn-ghost flex items-center gap-2 text-xs disabled:opacity-50"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            {clearingLogs ? 'Clearing...' : 'Clear All Logs'}
+          </button>
+          <button type="button" onClick={load} className="btn-ghost flex items-center gap-2 text-xs">
+            <RefreshCw className="w-3.5 h-3.5" /> Refresh
+          </button>
+        </div>
       </div>
 
       <div className="card">
@@ -173,6 +234,8 @@ export default function LogsPage() {
                   log={log}
                   expanded={expanded === i}
                   onToggle={() => setExpanded(expanded === i ? null : i)}
+                  onDelete={() => deleteLog(log.log_id)}
+                  deleting={deletingLogId === log.log_id}
                 />
               ))}
             </div>

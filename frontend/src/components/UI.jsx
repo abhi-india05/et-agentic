@@ -5,7 +5,7 @@ export function Spinner({ size = 'md' }) {
   return <Loader2 className={`${s} animate-spin text-accent`} />
 }
 
-export function LoadingState({ message = 'Processing…' }) {
+export function LoadingState({ message = 'Processing…', detail = '' }) {
   return (
     <div className="flex flex-col items-center justify-center py-16 gap-4">
       <div className="relative">
@@ -14,7 +14,7 @@ export function LoadingState({ message = 'Processing…' }) {
       </div>
       <div className="text-center">
         <div className="text-sm text-text font-mono">{message}</div>
-        <div className="text-xs text-muted mt-1">Agents are working autonomously</div>
+        {detail ? <div className="text-xs text-muted mt-1">{detail}</div> : null}
       </div>
     </div>
   )

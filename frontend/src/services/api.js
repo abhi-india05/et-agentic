@@ -51,7 +51,7 @@ async function request(path, options = {}) {
     const err = await res.json().catch(() => ({ detail: 'Network error' }))
     const msg = typeof err.detail === 'string'
       ? err.detail
-      : err.message || `HTTP ${res.status}`
+      : err.error?.message || err.message || `HTTP ${res.status}`
     toast.error(msg)
     throw new Error(msg)
   }
@@ -88,7 +88,7 @@ async function requestWithPagination(path, options = {}) {
     const err = await res.json().catch(() => ({ detail: 'Network error' }))
     const msg = typeof err.detail === 'string'
       ? err.detail
-      : err.message || `HTTP ${res.status}`
+      : err.error?.message || err.message || `HTTP ${res.status}`
     toast.error(msg)
     throw new Error(msg)
   }
@@ -131,6 +131,10 @@ export const api = {
   pipeline: () => request('/pipeline'),
   logs: (sessionId) =>
     request(`/logs${sessionId ? `?session_id=${sessionId}` : ''}`),
+  deleteLog: (logId) =>
+    request(`/logs/${encodeURIComponent(logId)}`, { method: 'DELETE' }),
+  clearLogs: ({ sessionId } = {}) =>
+    request(`/logs${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''}`, { method: 'DELETE' }),
   emails: () => request('/emails'),
   sessions: () => request('/sessions'),
   memoryStats: () => request('/memory/stats'),
@@ -147,6 +151,12 @@ export const api = {
 
   sendSequences: (body) =>
     request('/send-sequences', { method: 'POST', body: JSON.stringify(body) }),
+
+  sendLeadEmail: (body) =>
+    request('/send-sequences', { method: 'POST', body: JSON.stringify(body) }),
+
+  refineOutreachEmail: (body) =>
+    request('/outreach/refine-email', { method: 'POST', body: JSON.stringify(body) }),
 
   // --- Outreach Sessions (history / resume) ---
   outreachSessions: ({ page = 1, pageSize = 50 } = {}) => {

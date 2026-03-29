@@ -28,6 +28,17 @@ COMPANY_SIGNALS = {
 }
 
 
+def _env_int(name: str, default: int, *, minimum: int = 1, maximum: int = 1000) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
 def _normalize_company_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
@@ -50,21 +61,63 @@ def _company_candidates_from_row(row: Dict[str, Any]) -> List[str]:
 
 
 def _matches_company(requested_company: str, row: Dict[str, Any]) -> bool:
+    return _company_match_score(requested_company, row) >= 0.5
+
+
+def _company_match_score(requested_company: str, row: Dict[str, Any]) -> float:
     requested = _normalize_company_name(requested_company)
     if not requested:
-        return False
+        return 0.0
 
-    request_tokens = set(requested.split())
+    request_tokens = {token for token in requested.split() if len(token) >= 2}
+    best = 0.0
+
     for candidate in _company_candidates_from_row(row):
         norm_candidate = _normalize_company_name(candidate)
         if not norm_candidate:
             continue
+        if requested == norm_candidate:
+            return 1.0
         if requested in norm_candidate or norm_candidate in requested:
-            return True
-        candidate_tokens = set(norm_candidate.split())
-        if request_tokens and candidate_tokens and request_tokens.intersection(candidate_tokens):
-            return True
-    return False
+            best = max(best, 0.92)
+
+        candidate_tokens = {token for token in norm_candidate.split() if len(token) >= 2}
+        overlap = len(request_tokens.intersection(candidate_tokens))
+        if overlap:
+            token_ratio = overlap / max(len(request_tokens), 1)
+            best = max(best, 0.45 + (0.45 * token_ratio))
+
+    return round(min(best, 1.0), 4)
+
+
+def _profile_data_density_score(row: Dict[str, Any]) -> float:
+    profile_fields = [
+        "full_name",
+        "experiences0title",
+        "experiences0company",
+        "headline",
+        "summary",
+        "public_identifier",
+        "experiences0description",
+    ]
+    populated = sum(bool(str(row.get(field) or "").strip()) for field in profile_fields)
+    return round(populated / max(len(profile_fields), 1), 4)
+
+
+def _row_rank_score(requested_company: str, row: Dict[str, Any]) -> float:
+    company_score = _company_match_score(requested_company, row)
+    if company_score <= 0.0:
+        return 0.0
+
+    density = _profile_data_density_score(row)
+    title = (
+        str(row.get("experiences0title") or "").strip().lower()
+        or str(row.get("occupation") or "").strip().lower()
+    )
+    seniority_bonus = 0.06 if any(term in title for term in ["head", "vp", "chief", "director", "founder"]) else 0.0
+
+    score = (company_score * 0.74) + (density * 0.2) + seniority_bonus
+    return round(min(score, 1.0), 4)
 
 
 def _build_dataset_paths() -> List[str]:
@@ -148,7 +201,9 @@ def _row_to_lead(row: Dict[str, Any], fallback_company: str, dataset_path: str) 
         signals.append(f"role: {role}")
 
     completeness = sum(bool(value) for value in [role, company, headline, about, activity, linkedin])
-    score = round(min(0.95, 0.3 + (0.1 * completeness)), 2)
+    completeness_ratio = completeness / 6.0
+    rank_score = float(row.get("_row_rank_score") or 0.0)
+    score = round(min(0.99, 0.2 + (0.35 * completeness_ratio) + (0.45 * rank_score)), 2)
 
     return {
         "lead_id": lead_id,
@@ -165,8 +220,13 @@ def _row_to_lead(row: Dict[str, Any], fallback_company: str, dataset_path: str) 
         "activity": activity,
         "source_profile": public_identifier,
         "source_dataset": os.path.basename(dataset_path),
-        "raw_data": {k: v for k, v in row.items() if v is not None and str(v).strip() != ""},
+        "raw_data": {
+            k: v
+            for k, v in row.items()
+            if not str(k).startswith("_") and v is not None and str(v).strip() != ""
+        },
         "score": score,
+        "company_match_score": rank_score,
         "signals": signals,
         "enriched_at": now_iso(),
     }
@@ -175,6 +235,13 @@ def _row_to_lead(row: Dict[str, Any], fallback_company: str, dataset_path: str) 
 def enrich_company(company: str, industry: str = "default") -> Dict[str, Any]:
     logger.info("Enriching company data", company=company, industry=industry)
     csv_paths = _build_dataset_paths()
+    max_candidate_pool = _env_int("LINKEDIN_MAX_CANDIDATE_POOL", 120, minimum=20, maximum=600)
+    max_returned_leads = _env_int(
+        "LINKEDIN_MAX_RETURNED_LEADS",
+        30,
+        minimum=5,
+        maximum=max_candidate_pool,
+    )
 
     slug = re.sub(r'[^a-z0-9]', '-', company.lower())
     domain = f"{slug}.com"
@@ -193,16 +260,28 @@ def enrich_company(company: str, industry: str = "default") -> Dict[str, Any]:
                     continue
 
                 matched_rows: List[Dict[str, Any]] = []
+                scanned_rows = 0
                 for row in reader:
-                    if _matches_company(company, row):
-                        matched_rows.append(row)
-                    if len(matched_rows) >= 12:
-                        break
+                    scanned_rows += 1
+                    row_score = _row_rank_score(company, row)
+                    if row_score <= 0.0:
+                        continue
+                    ranked_row = dict(row)
+                    ranked_row["_row_rank_score"] = row_score
+                    matched_rows.append(ranked_row)
 
                 if matched_rows:
+                    matched_rows.sort(key=lambda item: float(item.get("_row_rank_score") or 0.0), reverse=True)
+                    candidate_rows = matched_rows[:max_candidate_pool]
                     matched_path = path
-                    leads = [_row_to_lead(row, company, path) for row in matched_rows[:5]]
-                    logger.info("Loaded leads from LinkedIn dataset", path=path, matches=len(leads))
+                    leads = [_row_to_lead(row, company, path) for row in candidate_rows[:max_returned_leads]]
+                    logger.info(
+                        "Loaded leads from LinkedIn dataset",
+                        path=path,
+                        matches=len(leads),
+                        candidate_pool=len(matched_rows),
+                        scanned_rows=scanned_rows,
+                    )
                     break
         except Exception as exc:
             logger.warning("linkedin_dataset_read_failed", path=path, error=str(exc))

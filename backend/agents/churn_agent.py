@@ -1,11 +1,11 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from backend.config.settings import settings
-from backend.llm.client import get_llm_client
+from backend.llm.gemini_client import call_gemini
 from backend.memory.vector_store import get_vector_store
 
 from backend.tools.crm_tool import get_all_accounts, get_all_usage_data
@@ -19,8 +19,6 @@ def _terminal_log(level: str, message: str) -> None:
     print(f"[BACKEND][churn_agent][{level.upper()}] {message}")
 
 
-def _get_openai_client():
-    return get_llm_client()
 
 
 def compute_churn_score(account: Dict, usage: Dict) -> float:
@@ -56,14 +54,10 @@ def compute_churn_score(account: Dict, usage: Dict) -> float:
     reraise=True,
 )
 def _call_llm_for_retention(prompt: str) -> str:
-    client = _get_openai_client()
-    response = client.chat.completions.create(
-        model=settings.openai_model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.5,
-        max_tokens=300,
-    )
-    text = (response.choices[0].message.content or "").strip()
+    response = call_gemini(prompt, temperature=0.5)
+    text = (response or "").strip()
+    if not isinstance(text, str):
+        text = str(text)
     _terminal_log("success", f"LLM raw output: {text}")
     logger.info("churn_llm_output", output=text)
     if not text:
@@ -95,10 +89,9 @@ Write a specific, actionable 2-3 sentence retention strategy. Return ONLY the st
     except Exception as exc:
         logger.warning("retention_llm_failed", company=account.get("company"), error=str(exc))
         _terminal_log("failure", f"LLM retention strategy failed for {account.get('company', 'unknown')}: {exc}")
-        return (
-            "Deploy immediate adoption workshops to reverse churn risk. "
-            f"Focus on lifting feature adoption from {feature_adoption_str}, resolving active support pain, and attaching a measurable 30-day success plan."
-        )
+        raise RuntimeError(
+            f"Retention strategy generation failed for {account.get('company', 'unknown')}: {exc}"
+        ) from exc
 
 
 def run_churn_agent(
@@ -107,11 +100,18 @@ def run_churn_agent(
     session_id: str,
     user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    if not user_id:
+        raise ValueError("user_id is required")
+
     logger.info("churn_agent_start", session_id=session_id)
     memory = get_vector_store()
-    namespace = user_id or "global"
-    accounts = get_all_accounts()
-    usage_map = {row["account_id"]: row for row in get_all_usage_data()}
+    namespace = user_id
+    accounts = get_all_accounts(user_id=user_id)
+    usage_map = {
+        str(row.get("account_id")): row
+        for row in get_all_usage_data(user_id=user_id)
+        if row.get("account_id")
+    }
     if account_ids:
         accounts = [account for account in accounts if account.get("account_id") in account_ids]
 
@@ -195,7 +195,7 @@ def run_churn_agent(
     memory.add_document(
         doc_id=generate_id("churn"),
         content=f"Churn analysis completed for {len(active_accounts)} accounts.",
-        metadata={"agent": "churn", "session_id": session_id, "user_id": user_id or ""},
+        metadata={"agent": "churn", "session_id": session_id, "user_id": user_id},
         namespace=namespace,
     )
     record_audit(

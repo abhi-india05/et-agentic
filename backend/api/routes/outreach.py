@@ -1,19 +1,34 @@
 """Outreach tracking routes — entries and metrics."""
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends
 
+from backend.agents.guardrails import parse_llm_json
 from backend.auth.deps import AuthUser, get_current_user
+from backend.config.settings import settings
 from backend.deps import get_outreach_entry_repo, get_session_repo
-from backend.models.schemas import OutreachEntryStatusUpdate
+from backend.llm.gemini_client import call_gemini
+from backend.models.schemas import OutreachEntryStatusUpdate, RefineEmailRequest, StrictBaseModel
 from backend.repositories.outreach_entries import OutreachEntryRepository
 from backend.repositories.sessions import SessionRepository
 from backend.utils.errors import APIError
 from backend.utils.helpers import clamp_page_size, now_iso
+from backend.utils.logger import get_logger, record_audit
 
 router = APIRouter(tags=["outreach"])
+logger = get_logger("outreach_routes")
+
+
+class RefineEmailLLMResponse(StrictBaseModel):
+    refined_email: str
+    explanation: str = ""
+
+
+def _terminal_log(level: str, message: str) -> None:
+    print(f"[BACKEND][outreach_routes][{level.upper()}] {message}")
 
 
 def _extract_product_name(input_data: Dict[str, Any]) -> str:
@@ -139,3 +154,80 @@ async def update_outreach_status(
         "entry": updated.model_dump(),
         "timestamp": now_iso()
     }
+
+
+@router.post("/refine-email")
+async def refine_email(
+    payload: RefineEmailRequest,
+    user: AuthUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    lead_context = payload.lead_context if isinstance(payload.lead_context, dict) else {}
+    insights = payload.insights if isinstance(payload.insights, dict) else {}
+
+    try:
+        prompt = (
+            "You refine outbound sales emails. You MUST revise the provided original email, "
+            "not regenerate from scratch. Keep factual grounding limited to the provided "
+            "lead_context and insights. Return only valid JSON.\n\n"
+            f"Lead ID: {payload.lead_id}\n"
+            f"User Prompt: {payload.prompt}\n\n"
+            f"Original Email:\n{payload.original_email}\n\n"
+            f"Lead Context (JSON): {json.dumps(lead_context, ensure_ascii=True)}\n"
+            f"Insights (JSON): {json.dumps(insights, ensure_ascii=True)}\n\n"
+            "Return JSON with this exact shape:\n"
+            "{\"refined_email\": \"...\", \"explanation\": \"...\"}"
+        )
+
+        response = call_gemini(prompt, structured=True, temperature=0.25)
+        
+        refined_email = response.get("refined_email", "")
+        explanation = response.get("explanation", "Successfully refined email via Gemini.")
+        
+        if not refined_email.strip():
+            raise ValueError("LLM returned empty refined email")
+
+        session_id = str(lead_context.get("session_id") or "manual_refine")
+        record_audit(
+            session_id=session_id,
+            agent_name="outreach_refiner",
+            action="refine_email",
+            input_summary=f"Refine email for lead {payload.lead_id}",
+            output_summary="Refined outreach email with user prompt and twin context",
+            status="success",
+            reasoning=explanation,
+            confidence=0.84,
+            extra={"lead_id": payload.lead_id, "user_id": user.user_id},
+        )
+        return {
+            "refined_email": refined_email,
+            "explanation": explanation,
+            "timestamp": now_iso(),
+        }
+    except Exception as exc:
+        logger.warning("refine_email_failed", lead_id=payload.lead_id, error=str(exc), user_id=user.user_id)
+        _terminal_log("failure", f"LLM refine failed for lead {payload.lead_id}: {exc}")
+        session_id = str(lead_context.get("session_id") or "manual_refine")
+        record_audit(
+            session_id=session_id,
+            agent_name="outreach_refiner",
+            action="refine_email",
+            input_summary=f"Refine email for lead {payload.lead_id}",
+            output_summary="LLM refinement failed",
+            status="failure",
+            reasoning=f"LLM refinement failed: {exc}",
+            confidence=0.0,
+            extra={"lead_id": payload.lead_id, "user_id": user.user_id},
+        )
+        raise APIError(
+            status_code=502,
+            code="llm_refinement_failed",
+            message=(
+                "Email refinement failed because the configured LLM request could not be completed. "
+                "Verify provider, base URL, model, and API key configuration."
+            ),
+            details={
+                "provider": "gemini",
+                "lead_id": payload.lead_id,
+                "error": str(exc),
+            },
+        ) from exc

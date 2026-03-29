@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from backend.config.settings import settings
-from backend.llm.client import get_llm_client
+from backend.llm.gemini_client import get_gemini_embedding
 from backend.utils.logger import get_logger
 
 logger = get_logger("vector_store")
@@ -41,7 +41,7 @@ class VectorMemoryStore:
         self.index_path = index_path or settings.faiss_index_path
         self.documents: List[Dict[str, Any]] = []
         self.index = None
-        self._openai_client = None
+        self._embedding_fn = None
         self._initialize()
 
     def _initialize(self) -> None:
@@ -51,32 +51,32 @@ class VectorMemoryStore:
             self.index = faiss.IndexFlatL2(self.dimension)
             logger.info("faiss_index_initialized", dimension=self.dimension)
 
-        if OPENAI_AVAILABLE and settings.has_openai_key:
+        if settings.has_gemini_key:
             try:
-                self._openai_client = get_llm_client()
+                self._embedding_fn = get_gemini_embedding
                 logger.info("embedding_client_ready")
             except Exception as e:
                 logger.warning("embedding_client_failed", error=str(e))
-                self._openai_client = None
+                self._embedding_fn = None
 
     def _get_embedding(self, text: str) -> np.ndarray:
-        if self._openai_client:
-            try:
-                response = self._openai_client.embeddings.create(
-                    model=settings.openai_embedding_model,
-                    input=text[:8000],
-                )
-                embedding = np.array(response.data[0].embedding, dtype=np.float32)
-                preview = embedding[:8].tolist()
-                _terminal_log("success", f"Embedding raw output (first 8 values): {preview}")
-                logger.info("embedding_llm_output", output_preview=preview, dimension=len(embedding))
-                return embedding
-            except Exception as e:
-                logger.warning("embedding_fallback", error=str(e))
-                _terminal_log("failure", f"Embedding generation failed: {e}")
+        if not self._embedding_fn:
+            raise RuntimeError(
+                "Embedding client is not configured. "
+                "Verify GEMINI_API_KEY before using vector memory."
+            )
 
-        rng = np.random.default_rng(abs(hash(text)) % (2**32))
-        return rng.standard_normal(self.dimension).astype(np.float32)
+        try:
+            embedding_list = self._embedding_fn(text)
+            embedding = np.array(embedding_list, dtype=np.float32)
+            preview = embedding[:8].tolist()
+            _terminal_log("success", f"Embedding raw output (first 8 values): {preview}")
+            logger.info("embedding_llm_output", output_preview=preview, dimension=len(embedding))
+            return embedding
+        except Exception as e:
+            logger.error("embedding_generation_failed", error=str(e))
+            _terminal_log("failure", f"Embedding generation failed: {e}")
+            raise RuntimeError(f"Embedding generation failed: {e}") from e
 
     # ------------------------------------------------------------------
     # Namespace-aware document operations
@@ -309,7 +309,7 @@ class VectorMemoryStore:
             "faiss_available": FAISS_AVAILABLE,
             "dimension": self.dimension,
             "index_active": self.index is not None,
-            "embedding_client": self._openai_client is not None,
+            "embedding_client": self._embedding_fn is not None,
             "namespaces": namespaces,
         }
 

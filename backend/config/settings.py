@@ -1,7 +1,7 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
-from typing import Optional
+from typing import List, Optional
 from urllib.parse import urlparse
 
 from pydantic import Field, field_validator
@@ -19,19 +19,13 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
-    openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
-    gemini_api_key: Optional[str] = Field(default=None, alias="GEMINI_API_KEY")
-    llm_provider: str = Field(default="openai", alias="LLM_PROVIDER")
-    openai_base_url: Optional[str] = Field(default=None, alias="OPENAI_BASE_URL")
-    gemini_base_url: str = Field(
-        default="https://generativelanguage.googleapis.com/v1beta/openai/",
-        alias="GEMINI_BASE_URL",
-    )
-    openai_model: str = Field(default="gpt-4o", alias="OPENAI_MODEL")
-    openai_embedding_model: str = Field(
-        default="text-embedding-3-small",
-        alias="OPENAI_EMBEDDING_MODEL",
-    )
+    gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
+    gemini_api_keys: str = Field(default="", alias="GEMINI_API_KEYS")
+    gemini_model: str = Field(default="", alias="GEMINI_MODEL")
+    gemini_embedding_model: str = Field(default="", alias="GEMINI_EMBEDDING_MODEL")
+    # Backward-compatible aliases still used in existing .env files.
+    openai_model: str = Field(default="", alias="OPENAI_MODEL")
+    openai_embedding_model: str = Field(default="", alias="OPENAI_EMBEDDING_MODEL")
 
     mongodb_uri: str = Field(default="mongodb://localhost:27017/revops_ai", alias="MONGODB_URI")
     mongo_server_selection_timeout_ms: int = Field(
@@ -70,6 +64,12 @@ class Settings(BaseSettings):
     )
     max_retries: int = Field(default=2, ge=0, le=5, alias="MAX_RETRIES")
     retry_delay: float = Field(default=1.0, ge=0.1, le=10.0, alias="RETRY_DELAY")
+    agent_inter_call_delay_seconds: float = Field(
+        default=1.5,
+        ge=0.0,
+        le=30.0,
+        alias="AGENT_INTER_CALL_DELAY_SECONDS",
+    )
     confidence_threshold: float = Field(default=0.6, ge=0.0, le=1.0, alias="CONFIDENCE_THRESHOLD")
     faiss_index_path: str = Field(default="./memory/faiss_index", alias="FAISS_INDEX_PATH")
 
@@ -152,13 +152,7 @@ class Settings(BaseSettings):
     def _normalize_log_level(cls, value: str) -> str:
         return (value or "INFO").strip().upper()
 
-    @field_validator("llm_provider")
-    @classmethod
-    def _normalize_provider(cls, value: str) -> str:
-        provider = (value or "openai").strip().lower()
-        if provider not in {"openai", "gemini"}:
-            raise ValueError("LLM_PROVIDER must be either 'openai' or 'gemini'")
-        return provider
+
 
     @property
     def is_production(self) -> bool:
@@ -189,22 +183,51 @@ class Settings(BaseSettings):
         return [item.strip() for item in raw.split(",") if item.strip()]
 
     @property
-    def llm_api_key(self) -> str:
-        if self.llm_provider == "gemini":
-            return (self.gemini_api_key or self.openai_api_key or "").strip()
-        return (self.openai_api_key or "").strip()
+    def gemini_api_key_list(self) -> List[str]:
+        keys: List[str] = []
+        raw = (self.gemini_api_keys or "").strip()
+        if raw:
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        keys.extend(str(item).strip() for item in parsed if str(item).strip())
+                except json.JSONDecodeError:
+                    pass
+            if not keys:
+                keys.extend(item.strip() for item in raw.split(",") if item.strip())
+
+        single_key = (self.gemini_api_key or "").strip()
+        if single_key:
+            keys.insert(0, single_key)
+
+        deduped: List[str] = []
+        seen = set()
+        for key in keys:
+            if key and key not in seen:
+                seen.add(key)
+                deduped.append(key)
+        return deduped
 
     @property
-    def llm_base_url(self) -> Optional[str]:
-        if self.openai_base_url:
-            return self.openai_base_url.strip()
-        if self.llm_provider == "gemini":
-            return self.gemini_base_url.strip()
-        return None
+    def has_gemini_key(self) -> bool:
+        return bool(self.gemini_api_key_list)
 
     @property
-    def has_openai_key(self) -> bool:
-        return bool(self.llm_api_key)
+    def resolved_gemini_model(self) -> str:
+        return (
+            self.gemini_model.strip()
+            or self.openai_model.strip()
+            or "gemini-2.5-flash"
+        )
+
+    @property
+    def resolved_gemini_embedding_model(self) -> str:
+        return (
+            self.gemini_embedding_model.strip()
+            or self.openai_embedding_model.strip()
+            or "gemini-embedding-001"
+        )
 
     @property
     def is_mock_email(self) -> bool:
@@ -243,8 +266,8 @@ class Settings(BaseSettings):
             if not self.auth_audience.strip():
                 problems.append("AUTH_AUDIENCE must be configured.")
         if self.is_production:
-            if not self.llm_api_key:
-                problems.append("An LLM API key is required in production.")
+            if not self.gemini_api_key_list:
+                problems.append("At least one Gemini API key (GEMINI_API_KEY or GEMINI_API_KEYS) is required in production.")
             if not self.cors_origins_list:
                 problems.append("CORS_ORIGINS must be configured in production.")
             if not self.resolved_auth_cookie_secure:
