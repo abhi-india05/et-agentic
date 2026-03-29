@@ -116,8 +116,7 @@ function SelectedLeadSourceCard({ lead }) {
   )
 }
 
-function LeadCard({ lead, twin, sequence }) {
-  const [showTwin, setShowTwin] = useState(false)
+function LeadCard({ lead, sequence }) {
   const linkedinUrl = lead.linkedin_url || lead.linkedin
   return (
     <div className="card space-y-4">
@@ -158,32 +157,6 @@ function LeadCard({ lead, twin, sequence }) {
         </div>
       )}
 
-      {twin && (
-        <div>
-          <button onClick={() => setShowTwin(!showTwin)} className="text-xs text-accent font-mono hover:underline flex items-center gap-1">
-            {showTwin ? '▾' : '▸'} Digital Twin Insights
-          </button>
-          {showTwin && (
-            <div className="mt-2 p-3 bg-void rounded-lg border border-border space-y-2">
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div><span className="text-muted">Style:</span> <span className="text-text font-mono">{twin.buying_style}</span></div>
-                <div><span className="text-muted">Risk:</span> <span className="text-text font-mono">{twin.risk_perception}</span></div>
-                <div><span className="text-muted">Timeline:</span> <span className="text-text font-mono">{twin.estimated_decision_timeline}</span></div>
-                <div><span className="text-muted">Tone:</span> <span className="text-text font-mono">{twin.recommended_tone}</span></div>
-              </div>
-              {twin.top_objections?.length > 0 && (
-                <div>
-                  <div className="text-xs text-muted mb-1">Top Objection</div>
-                  <div className="text-xs text-danger font-mono">{twin.top_objections[0]?.objection}</div>
-                  <div className="text-xs text-success font-mono mt-0.5">↳ {twin.top_objections[0]?.counter_strategy}</div>
-                </div>
-              )}
-              <div className="text-xs text-muted italic">"{twin.opening_hook}"</div>
-            </div>
-          )}
-        </div>
-      )}
-
       {sequence && (
         <div>
           <div className="text-xs text-muted font-mono uppercase tracking-wider mb-3">Email Sequence</div>
@@ -199,6 +172,42 @@ function LeadCard({ lead, twin, sequence }) {
             </div>
           )}
         </div>
+      )}
+    </div>
+  )
+}
+
+function DigitalTwinCard({ twin, lead }) {
+  const leadName = lead?.name || twin?.buyer_name || 'Unknown lead'
+  const leadRole = lead?.title || twin?.buyer_title || 'Unknown role'
+
+  return (
+    <div className="card space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="font-display font-700 text-text">{leadName}</div>
+          <div className="text-xs text-muted mt-1">{leadRole}</div>
+        </div>
+        <div className="text-xs text-muted font-mono">Confidence: {fmt.pct(twin?.confidence_score || 0)}</div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+        <div><span className="text-muted">Buying Style:</span> <span className="text-text font-mono">{twin?.buying_style || 'N/A'}</span></div>
+        <div><span className="text-muted">Risk:</span> <span className="text-text font-mono">{twin?.risk_perception || 'N/A'}</span></div>
+        <div><span className="text-muted">Timeline:</span> <span className="text-text font-mono">{twin?.estimated_decision_timeline || 'N/A'}</span></div>
+        <div><span className="text-muted">Tone:</span> <span className="text-text font-mono">{twin?.recommended_tone || 'N/A'}</span></div>
+      </div>
+
+      {twin?.top_objections?.length > 0 && (
+        <div className="space-y-1">
+          <div className="text-xs text-muted">Top Objection</div>
+          <div className="text-xs text-danger font-mono">{twin.top_objections[0]?.objection}</div>
+          <div className="text-xs text-success font-mono">↳ {twin.top_objections[0]?.counter_strategy}</div>
+        </div>
+      )}
+
+      {twin?.opening_hook && (
+        <div className="text-xs text-muted italic">"{twin.opening_hook}"</div>
       )}
     </div>
   )
@@ -732,8 +741,20 @@ function LogsTab({ sessionId }) {
                 <LeadCard
                   key={lead.id || i}
                   lead={lead}
-                  twin={twins[i]}
                   sequence={sequences[i]}
+                />
+              ))}
+            </div>
+          )}
+
+          {twins.length > 0 && (
+            <div className="space-y-4">
+              <SectionHeader title="Digital Twin Agent" subtitle="Buyer behavior, objections, and tone recommendations" />
+              {twins.map((twin, i) => (
+                <DigitalTwinCard
+                  key={leads[i]?.id || twin?.buyer_name || i}
+                  twin={twin}
+                  lead={leads[i]}
                 />
               ))}
             </div>
