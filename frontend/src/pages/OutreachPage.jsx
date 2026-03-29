@@ -9,6 +9,11 @@ import { fmt } from '../utils/fmt.js'
 
 const INDUSTRIES = ['SaaS', 'Healthcare', 'Finance', 'Logistics', 'Retail', 'Manufacturing', 'CleanTech', 'AI/ML', 'Cybersecurity', 'EdTech']
 const SIZES = ['1-50', '51-200', '201-500', '501-2000', '2000+']
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+function getLeadKey(sequence, index = 0) {
+  return sequence?.lead_id || sequence?.sequence_id || sequence?.lead_email || `lead-${index}`
+}
 
 function EmailCard({ email, step }) {
   const [expanded, setExpanded] = useState(step === 1)
@@ -43,8 +48,77 @@ function EmailCard({ email, step }) {
   )
 }
 
+function SelectedLeadSourceCard({ lead }) {
+  const [expanded, setExpanded] = useState(false)
+  const linkedinUrl = lead.linkedin_url || lead.linkedin || ''
+  const role = lead.role || lead.title || 'Unknown role'
+  const aboutText = lead.about || lead.raw_data?.summary || ''
+  const hasLongAbout = aboutText.length > 220
+
+  return (
+    <div className="card space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="font-display font-700 text-text">{lead.name || 'Unknown name'}</div>
+          <div className="text-xs text-muted mt-1">{role}</div>
+          <div className="text-xs text-muted">{lead.company || 'Unknown company'}</div>
+        </div>
+        {lead.id && (
+          <div className="text-[10px] text-muted font-mono break-all max-w-[180px] text-right">ID: {lead.id}</div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+        <div className="space-y-1">
+          <div className="text-muted font-mono uppercase tracking-wider">LinkedIn</div>
+          {linkedinUrl ? (
+            <a
+              href={linkedinUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-accent hover:underline break-all inline-flex items-center gap-1"
+            >
+              {linkedinUrl}
+              <ExternalLink className="w-3 h-3" />
+            </a>
+          ) : (
+            <div className="text-text-dim">No LinkedIn URL available</div>
+          )}
+        </div>
+
+        <div className="space-y-1">
+          <div className="text-muted font-mono uppercase tracking-wider">Email</div>
+          <div className="text-text-dim break-all">{lead.email || 'No email available'}</div>
+        </div>
+      </div>
+
+      <div className="space-y-1">
+        <div className="text-muted font-mono uppercase tracking-wider text-xs">Headline</div>
+        <div className="text-xs text-text-dim leading-relaxed">{lead.headline || 'No headline available'}</div>
+      </div>
+
+      <div className="space-y-1">
+        <div className="text-muted font-mono uppercase tracking-wider text-xs">About</div>
+        <div className={`text-xs text-text-dim leading-relaxed whitespace-pre-wrap ${expanded ? '' : 'max-h-20 overflow-hidden'}`}>
+          {aboutText || 'No about section available'}
+        </div>
+        {hasLongAbout && (
+          <button
+            type="button"
+            onClick={() => setExpanded(!expanded)}
+            className="text-xs text-accent hover:underline font-mono"
+          >
+            {expanded ? 'Show less' : 'Show more'}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function LeadCard({ lead, twin, sequence }) {
   const [showTwin, setShowTwin] = useState(false)
+  const linkedinUrl = lead.linkedin_url || lead.linkedin
   return (
     <div className="card space-y-4">
       <div className="flex items-start justify-between">
@@ -65,9 +139,9 @@ function LeadCard({ lead, twin, sequence }) {
 
       <div className="flex items-center gap-2 text-xs">
         <Mail className="w-3.5 h-3.5 text-muted" />
-        <span className="font-mono text-text-dim">{lead.email}</span>
-        {lead.linkedin && (
-          <a href={lead.linkedin} target="_blank" rel="noreferrer" className="text-accent hover:underline flex items-center gap-1 ml-1">
+        <span className="font-mono text-text-dim">{lead.email || 'No email available'}</span>
+        {linkedinUrl && (
+          <a href={linkedinUrl} target="_blank" rel="noreferrer" className="text-accent hover:underline flex items-center gap-1 ml-1">
             LinkedIn <ExternalLink className="w-3 h-3" />
           </a>
         )}
@@ -150,6 +224,8 @@ function LogsTab({ sessionId }) {
   const [sender, setSender] = useState({ from_name: 'RevOps AI', from_email: 'sales@revops-ai.com' })
   const [sendingDrafts, setSendingDrafts] = useState(false)
   const [sendSummary, setSendSummary] = useState(null)
+  const [editedEmails, setEditedEmails] = useState({})
+  const [emailErrors, setEmailErrors] = useState({})
 
   function logAgentTerminalStatus(finalOutput, source) {
     const outputs = finalOutput?.agent_outputs || {}
@@ -248,19 +324,30 @@ function LogsTab({ sessionId }) {
   useEffect(() => {
     if (!sequences.length) {
       setDraftSequences([])
+      setEditedEmails({})
+      setEmailErrors({})
       return
     }
-    setDraftSequences(
-      sequences.map((seq) => ({
-        lead_name: seq.lead_name || '',
-        lead_email: seq.lead_email || '',
-        sequence_id: seq.sequence_id,
-        emails: (seq.emails || []).map((e) => ({
-          subject: e.subject || '',
-          body: e.body || '',
-        })),
-      }))
-    )
+
+    const nextDrafts = sequences.map((seq, idx) => ({
+      lead_id: seq.lead_id || getLeadKey(seq, idx),
+      lead_name: seq.lead_name || '',
+      lead_email: seq.lead_email || '',
+      sequence_id: seq.sequence_id,
+      emails: (seq.emails || []).map((e) => ({
+        subject: e.subject || '',
+        body: e.body || '',
+      })),
+    }))
+    setDraftSequences(nextDrafts)
+
+    const nextEditedEmails = {}
+    nextDrafts.forEach((seq, idx) => {
+      const leadKey = getLeadKey(seq, idx)
+      nextEditedEmails[leadKey] = seq.lead_email || ''
+    })
+    setEditedEmails(nextEditedEmails)
+    setEmailErrors({})
   }, [sequences])
 
   async function runWorkflow({ clearExisting } = { clearExisting: true }) {
@@ -311,23 +398,60 @@ function LogsTab({ sessionId }) {
     )
   }
 
+  function updateRecipientEmail(leadKey, value) {
+    setEditedEmails((prev) => ({
+      ...prev,
+      [leadKey]: value,
+    }))
+    setEmailErrors((prev) => {
+      if (!prev[leadKey]) return prev
+      const next = { ...prev }
+      if (EMAIL_RE.test(String(value || '').trim())) {
+        delete next[leadKey]
+      }
+      return next
+    })
+  }
+
   async function handleSendReviewed() {
     if (!draftSequences.length) return
     setSendingDrafts(true)
     setError(null)
     try {
+      const nextEmailErrors = {}
+      draftSequences.forEach((seq, seqIdx) => {
+        const leadKey = getLeadKey(seq, seqIdx)
+        const recipientEmail = String(editedEmails[leadKey] ?? seq.lead_email ?? '').trim()
+        if (!EMAIL_RE.test(recipientEmail)) {
+          nextEmailErrors[leadKey] = recipientEmail ? 'Invalid email format' : 'Enter recipient email'
+        }
+      })
+
+      if (Object.keys(nextEmailErrors).length > 0) {
+        setEmailErrors(nextEmailErrors)
+        setError('Please fix invalid recipient emails before sending.')
+        toast.error('Please fix invalid recipient emails before sending.')
+        return
+      }
+
       const payload = {
-        sequences: draftSequences.map((seq) => ({
-          lead_name: seq.lead_name,
-          lead_email: seq.lead_email,
-          sequence_id: seq.sequence_id,
-          emails: seq.emails.map((e) => ({
-            subject: e.subject,
-            body: e.body,
-            from_name: sender.from_name,
-            from_email: sender.from_email,
-          })),
-        })),
+        sequences: draftSequences.map((seq, seqIdx) => {
+          const leadKey = getLeadKey(seq, seqIdx)
+          const recipientEmail = String(editedEmails[leadKey] ?? seq.lead_email ?? '').trim()
+          return {
+            lead_id: seq.lead_id || leadKey,
+            lead_name: seq.lead_name,
+            lead_email: recipientEmail,
+            email: recipientEmail,
+            sequence_id: seq.sequence_id,
+            emails: seq.emails.map((e) => ({
+              subject: e.subject,
+              body: e.body,
+              from_name: sender.from_name,
+              from_email: sender.from_email,
+            })),
+          }
+        }),
       }
       const res = await api.sendSequences(payload)
       setSendSummary(res.summary || null)
@@ -528,30 +652,46 @@ function LogsTab({ sessionId }) {
               </div>
 
               <div className="space-y-4">
-                {draftSequences.map((seq, seqIdx) => (
-                  <div key={seq.sequence_id || seqIdx} className="border border-border rounded-lg p-3 space-y-3 bg-panel">
-                    <div className="text-xs text-muted font-mono">
-                      {seq.lead_name || 'Lead'} · {seq.lead_email || 'no-email'}
-                    </div>
-                    {seq.emails.map((email, emailIdx) => (
-                      <div key={emailIdx} className="space-y-2 border-t border-border pt-2">
-                        <div className="text-xs text-muted font-mono">Email #{emailIdx + 1}</div>
-                        <input
-                          type="text"
-                          value={email.subject}
-                          onChange={e => updateDraftEmail(seqIdx, emailIdx, 'subject', e.target.value)}
-                          className="w-full bg-void border border-border rounded-lg px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
-                        />
-                        <textarea
-                          value={email.body}
-                          onChange={e => updateDraftEmail(seqIdx, emailIdx, 'body', e.target.value)}
-                          rows={5}
-                          className="w-full bg-void border border-border rounded-lg px-3 py-2 text-sm text-text focus:border-accent focus:outline-none resize-y font-mono"
-                        />
+                {draftSequences.map((seq, seqIdx) => {
+                  const leadKey = getLeadKey(seq, seqIdx)
+                  return (
+                    <div key={seq.sequence_id || seqIdx} className="border border-border rounded-lg p-3 space-y-3 bg-panel">
+                      <div className="text-xs text-muted font-mono">
+                        {seq.lead_name || 'Lead'} · {seq.lead_email || 'no-email'}
                       </div>
-                    ))}
-                  </div>
-                ))}
+                      <div>
+                        <label className="text-xs text-muted font-mono block mb-1.5">Recipient Email</label>
+                        <input
+                          type="email"
+                          value={editedEmails[leadKey] ?? seq.lead_email ?? ''}
+                          onChange={e => updateRecipientEmail(leadKey, e.target.value)}
+                          placeholder="Enter recipient email"
+                          className={`w-full bg-void border rounded-lg px-3 py-2 text-sm text-text focus:border-accent focus:outline-none ${emailErrors[leadKey] ? 'border-danger' : 'border-border'}`}
+                        />
+                        {emailErrors[leadKey] && (
+                          <div className="text-xs text-danger font-mono mt-1">{emailErrors[leadKey]}</div>
+                        )}
+                      </div>
+                      {seq.emails.map((email, emailIdx) => (
+                        <div key={emailIdx} className="space-y-2 border-t border-border pt-2">
+                          <div className="text-xs text-muted font-mono">Email #{emailIdx + 1}</div>
+                          <input
+                            type="text"
+                            value={email.subject}
+                            onChange={e => updateDraftEmail(seqIdx, emailIdx, 'subject', e.target.value)}
+                            className="w-full bg-void border border-border rounded-lg px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
+                          />
+                          <textarea
+                            value={email.body}
+                            onChange={e => updateDraftEmail(seqIdx, emailIdx, 'body', e.target.value)}
+                            rows={5}
+                            className="w-full bg-void border border-border rounded-lg px-3 py-2 text-sm text-text focus:border-accent focus:outline-none resize-y font-mono"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })}
               </div>
 
               <button
@@ -573,10 +713,24 @@ function LogsTab({ sessionId }) {
 
           {leads.length > 0 && (
             <div className="space-y-4">
+              <SectionHeader title="Selected Leads (Source Data)" subtitle="LinkedIn source details used for prospecting and outreach" />
+              <div className="max-h-[34rem] overflow-y-auto pr-1 custom-scrollbar space-y-3">
+                {leads.map((lead, i) => (
+                  <SelectedLeadSourceCard
+                    key={lead.id || lead.lead_id || i}
+                    lead={lead}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {leads.length > 0 && (
+            <div className="space-y-4">
               <SectionHeader title={`${leads.length} Qualified Leads`} subtitle={`ICP fit: ${fmt.pct(prospectData.icp_fit_score)}`} />
               {leads.map((lead, i) => (
                 <LeadCard
-                  key={i}
+                  key={lead.id || i}
                   lead={lead}
                   twin={twins[i]}
                   sequence={sequences[i]}

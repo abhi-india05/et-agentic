@@ -44,6 +44,7 @@ def _build_grounded_prospecting(company: str, enriched: Dict[str, Any]) -> Prosp
 
     mapped_leads = []
     for lead in selected:
+        lead_id = str(lead.get("id") or lead.get("lead_id") or generate_id("lead"))
         role = str(lead.get("role") or lead.get("title") or "").strip()
         observed_fields = []
         for field in ["headline", "about", "activity", "linkedin"]:
@@ -52,16 +53,19 @@ def _build_grounded_prospecting(company: str, enriched: Dict[str, Any]) -> Prosp
 
         mapped_leads.append(
             {
+                "id": lead_id,
                 "name": lead.get("name", "Unknown Lead"),
                 "title": role,
                 "role": role,
                 "company": lead.get("company") or company,
                 "email": lead.get("email") or "",
                 "linkedin": lead.get("linkedin") or "",
+                "linkedin_url": lead.get("linkedin_url") or lead.get("linkedin") or "",
                 "headline": lead.get("headline") or "",
                 "about": lead.get("about") or "",
                 "activity": lead.get("activity") or "",
                 "source_profile": lead.get("source_profile") or "",
+                "raw_data": lead.get("raw_data"),
                 "score": float(lead.get("score", 0.0) or 0.0),
                 "signals": lead.get("signals", []) or [],
                 "pain_points": _derive_pain_points(lead),

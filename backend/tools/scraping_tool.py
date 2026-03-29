@@ -106,6 +106,7 @@ def _safe_snippet(value: str, max_len: int = 180) -> str:
 
 
 def _row_to_lead(row: Dict[str, Any], fallback_company: str, dataset_path: str) -> Dict[str, Any]:
+    lead_id = generate_id("lead")
     full_name = (row.get("full_name") or "").strip()
     first_name = (row.get("first_name") or "").strip()
     last_name = (row.get("last_name") or "").strip()
@@ -150,18 +151,21 @@ def _row_to_lead(row: Dict[str, Any], fallback_company: str, dataset_path: str) 
     score = round(min(0.95, 0.3 + (0.1 * completeness)), 2)
 
     return {
-        "lead_id": generate_id("lead"),
+        "lead_id": lead_id,
+        "id": lead_id,
         "name": name,
         "title": role or "",
         "role": role or "",
         "company": company,
         "email": email,
         "linkedin": linkedin,
+        "linkedin_url": linkedin,
         "headline": headline,
         "about": about,
         "activity": activity,
         "source_profile": public_identifier,
         "source_dataset": os.path.basename(dataset_path),
+        "raw_data": {k: v for k, v in row.items() if v is not None and str(v).strip() != ""},
         "score": score,
         "signals": signals,
         "enriched_at": now_iso(),

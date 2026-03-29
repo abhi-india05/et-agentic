@@ -54,19 +54,30 @@ class WorkflowValidation(StrictBaseModel):
 
 
 class Lead(StrictBaseModel):
+    id: Optional[str] = None
     name: str
     title: str
     role: Optional[str] = None
     company: str
     email: Optional[str] = None
     linkedin: Optional[str] = None
+    linkedin_url: Optional[str] = None
     headline: Optional[str] = None
     about: Optional[str] = None
     activity: Optional[str] = None
     source_profile: Optional[str] = None
+    raw_data: Optional[Dict[str, Any]] = None
     score: float = Field(default=0.0, ge=0.0, le=1.0)
     signals: List[str] = Field(default_factory=list)
     pain_points: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _sync_linkedin_fields(self) -> "Lead":
+        if not self.linkedin_url and self.linkedin:
+            self.linkedin_url = self.linkedin
+        if not self.linkedin and self.linkedin_url:
+            self.linkedin = self.linkedin_url
+        return self
 
 
 class EmailExplanation(StrictBaseModel):
@@ -94,6 +105,7 @@ class EmailStep(StrictBaseModel):
 
 
 class EmailSequenceResult(StrictBaseModel):
+    lead_id: Optional[str] = None
     lead_name: str
     lead_email: str = ""
     sequence_id: str
@@ -273,10 +285,21 @@ class ReviewedEmail(StrictBaseModel):
 
 
 class ReviewedSequence(StrictBaseModel):
-    lead_email: str
+    lead_id: Optional[str] = None
+    lead_email: str = ""
+    email: Optional[str] = None
     lead_name: Optional[str] = ""
     sequence_id: Optional[str] = None
+    content: Optional[str] = None
     emails: List[ReviewedEmail] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _sync_email_fields(self) -> "ReviewedSequence":
+        if not self.lead_email and self.email:
+            self.lead_email = self.email
+        if not self.email and self.lead_email:
+            self.email = self.lead_email
+        return self
 
 
 class SendSequencesRequest(StrictBaseModel):

@@ -232,6 +232,7 @@ def run_outreach_agent(
     for index, lead in enumerate(leads[:2]):
         twin = twin_profiles[index] if index < len(twin_profiles) else {}
         tone_hint = _text(twin.get("recommended_tone")) or "consultative"
+        lead_id = _text(lead.get("id") or lead.get("lead_id") or lead.get("source_profile"))
 
         insights = extract_insights(lead)
         generated = generate_outreach_email(lead, insights, product_context)
@@ -280,6 +281,7 @@ def run_outreach_agent(
             predicted_reply = round(min(0.2, max(0.01, 0.02 + (0.1 * confidence))), 4)
 
         sequence = EmailSequenceResult(
+            lead_id=lead_id or None,
             lead_name=lead_name,
             lead_email=_text(lead.get("email")),
             sequence_id=sequence_id,

@@ -186,10 +186,34 @@ async def send_sequences(
             }
             for email in sequence.emails
         ]
-        seq_id = sequence.sequence_id or generate_session_id()
+        if not payload and (sequence.content or "").strip():
+            payload = [
+                {
+                    "subject": "Outreach message",
+                    "body": sequence.content.strip(),
+                    "from_email": None,
+                    "from_name": None,
+                }
+            ]
+
+        recipient_email = (sequence.email or sequence.lead_email or "").strip()
+        if not recipient_email:
+            results.append(
+                {
+                    "success": False,
+                    "error": "Missing recipient email",
+                    "sequence_id": sequence.sequence_id,
+                    "sent": 0,
+                    "failed": max(1, len(payload)),
+                }
+            )
+            total_failed += max(1, len(payload))
+            continue
+
+        seq_id = sequence.sequence_id or sequence.lead_id or generate_session_id()
         result = await asyncio.to_thread(
             client.send_sequence,
-            to_email=sequence.lead_email,
+            to_email=recipient_email,
             to_name=sequence.lead_name or "",
             emails=payload,
             sequence_id=seq_id,
